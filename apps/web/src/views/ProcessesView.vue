@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
-import { fetchProcesses, type ProcessInfo } from '@/lib/api'
+import { onMounted, onUnmounted, ref, computed, watch, inject } from 'vue'
+import { fetchProcesses, killProcess, type ProcessInfo } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import * as echarts from 'echarts'
 
 const processes = ref<ProcessInfo[]>([])
@@ -16,6 +17,10 @@ const pieRef = ref<HTMLDivElement | null>(null)
 let cpuChart: echarts.ECharts | null = null
 let memChart: echarts.ECharts | null = null
 let pieChart: echarts.ECharts | null = null
+
+const toast = inject<(message: string, type: 'success' | 'error' | 'info') => void>('toast')
+
+const confirmTarget = ref<{ pid: number; name: string } | null>(null)
 
 onMounted(async () => {
   await load()
@@ -94,10 +99,42 @@ const filtered = computed(() => {
     (p) => p.name.toLowerCase().includes(q) || p.command.toLowerCase().includes(q) || String(p.pid).includes(q)
   )
 })
+
+function requestKill(pid: number, name: string) {
+  confirmTarget.value = { pid, name }
+}
+
+async function confirmKill() {
+  if (!confirmTarget.value) return
+  const { pid, name } = confirmTarget.value
+  confirmTarget.value = null
+  try {
+    await killProcess(pid)
+    toast?.(`进程 ${name} (PID: ${pid}) 已结束`, 'success')
+    await load()
+  } catch (e) {
+    toast?.(`结束进程失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error')
+  }
+}
+
+function cancelKill() {
+  confirmTarget.value = null
+}
 </script>
 
 <template>
   <LoadingOverlay :visible="loading" message="加载进程列表…" />
+
+  <ConfirmDialog
+    v-if="confirmTarget"
+    title="确认结束进程"
+    :message="`确定要结束进程「${confirmTarget.name}」(PID: ${confirmTarget.pid}) 吗？该操作不可撤销。`"
+    confirmText="结束进程"
+    cancelText="取消"
+    :danger="true"
+    @confirm="confirmKill"
+    @cancel="cancelKill"
+  />
 
   <section class="page-grid">
     <article class="panel full">
@@ -123,11 +160,11 @@ const filtered = computed(() => {
 
       <div class="process-table" v-if="!error">
         <div class="table-head">
-          <span>PID</span><span>名称</span><span>状态</span><span>CPU %</span><span>内存 KB</span><span>用户</span><span>命令</span>
+          <span>PID</span><span>名称</span><span>状态</span><span>CPU %</span><span>内存 KB</span><span>用户</span><span>命令</span><span>操作</span>
         </div>
         <template v-if="loading">
           <div v-for="i in 12" :key="`sk-${i}`" class="table-row skeleton-row">
-            <span v-for="w in [50,100,40,50,60,60,200]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
+            <span v-for="w in [50,100,40,50,60,60,200,60]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
           </div>
         </template>
         <div v-else v-for="p in filtered" :key="p.pid" class="table-row">
@@ -138,6 +175,9 @@ const filtered = computed(() => {
           <span class="num">{{ p.memory_kb.toLocaleString() }}</span>
           <span>{{ p.user }}</span>
           <span class="command" :title="p.command">{{ p.command }}</span>
+          <span class="action">
+            <button class="btn-kill" @click="requestKill(p.pid, p.name)" title="结束进程">结束</button>
+          </span>
         </div>
         <p v-if="!loading && filtered.length === 0" class="muted">无匹配进程</p>
       </div>
@@ -154,7 +194,7 @@ const filtered = computed(() => {
 .btn-icon:hover { background: #f5f0ea; }
 .count { font-size: 13px; white-space: nowrap; }
 .process-table { font-size: 13px; max-height: calc(100vh - 520px); overflow-y: auto; border-radius: 8px; border: 1px solid #eee; }
-.table-head, .table-row { display: grid; grid-template-columns: 70px 140px 60px 70px 90px 80px 1fr; gap: 8px; padding: 6px 8px; align-items: center; }
+.table-head, .table-row { display: grid; grid-template-columns: 70px 140px 60px 70px 90px 80px 1fr 60px; gap: 8px; padding: 6px 8px; align-items: center; }
 .table-head { font-size: 11px; text-transform: uppercase; color: #888; border-bottom: 1px solid #eee; font-weight: 600; position: sticky; top: 0; background: #fffaf2; z-index: 1; }
 .table-row { border-bottom: 1px solid #f5f0ea; }
 .table-row:hover { background: rgba(201,169,110,0.08); }
@@ -169,4 +209,19 @@ const filtered = computed(() => {
 .state-Z { background: #ffebee; color: #c62828; }
 .num { font-family: monospace; text-align: right; }
 .command { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: #666; max-width: 300px; }
+.action { display: flex; justify-content: center; }
+.btn-kill {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  border: 1px solid #ef9a9a;
+  background: #ffebee;
+  color: #c62828;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-kill:hover {
+  background: #ffcdd2;
+  border-color: #e57373;
+}
 </style>

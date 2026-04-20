@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, computed } from 'vue'
-import { fetchServices, type ServiceInfo } from '@/lib/api'
+import { onMounted, ref, watch, computed, inject } from 'vue'
+import { fetchServices, controlService, type ServiceInfo, type ServiceAction } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import * as echarts from 'echarts'
 
 const services = ref<ServiceInfo[]>([])
@@ -10,6 +11,15 @@ const search = ref('')
 const loading = ref(true)
 const pieRef = ref<HTMLDivElement | null>(null)
 let pieChart: echarts.ECharts | null = null
+
+const toast = inject<(message: string, type: 'success' | 'error' | 'info') => void>('toast')
+
+interface ConfirmState {
+  name: string
+  action: ServiceAction
+}
+
+const confirmTarget = ref<ConfirmState | null>(null)
 
 onMounted(async () => {
   await load()
@@ -63,10 +73,76 @@ const filtered = computed(() => {
   const q = search.value.toLowerCase()
   return services.value.filter((s) => s.name.toLowerCase().includes(q))
 })
+
+function getAvailableActions(service: ServiceInfo): ServiceAction[] {
+  const actions: ServiceAction[] = []
+  if (service.active_state !== 'active') actions.push('start')
+  if (service.active_state === 'active') actions.push('stop')
+  actions.push('restart')
+  return actions
+}
+
+function getActionLabel(action: ServiceAction): string {
+  const labels: Record<ServiceAction, string> = {
+    start: '启动',
+    stop: '停止',
+    restart: '重启',
+  }
+  return labels[action]
+}
+
+function requestAction(name: string, action: ServiceAction) {
+  confirmTarget.value = { name, action }
+}
+
+async function confirmAction() {
+  if (!confirmTarget.value) return
+  const { name, action } = confirmTarget.value
+  confirmTarget.value = null
+  try {
+    await controlService(name, action)
+    toast?.(`服务 ${name} 已${action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'}`, 'success')
+    await load()
+  } catch (e) {
+    toast?.(`操作失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error')
+  }
+}
+
+function cancelAction() {
+  confirmTarget.value = null
+}
+
+function getConfirmTitle(action: ServiceAction): string {
+  const titles: Record<ServiceAction, string> = {
+    start: '确认启动服务',
+    stop: '确认停止服务',
+    restart: '确认重启服务',
+  }
+  return titles[action]
+}
+
+function getConfirmMessage(name: string, action: ServiceAction): string {
+  const verbs: Record<ServiceAction, string> = {
+    start: '启动',
+    stop: '停止',
+    restart: '重启',
+  }
+  return `确定要${verbs[action]}服务「${name}」吗？`
+}
 </script>
 
 <template>
   <LoadingOverlay :visible="loading" message="加载服务列表…" />
+
+  <ConfirmDialog
+    v-if="confirmTarget"
+    :title="getConfirmTitle(confirmTarget.action)"
+    :message="getConfirmMessage(confirmTarget.name, confirmTarget.action)"
+    :confirmText="getActionLabel(confirmTarget.action)"
+    cancelText="取消"
+    @confirm="confirmAction"
+    @cancel="cancelAction"
+  />
 
   <section class="page-grid">
     <article class="panel full">
@@ -89,11 +165,11 @@ const filtered = computed(() => {
 
       <div class="service-table" v-if="!error">
         <div class="table-head">
-          <span>服务名</span><span>加载状态</span><span>活动状态</span><span>子状态</span>
+          <span>服务名</span><span>加载状态</span><span>活动状态</span><span>子状态</span><span>操作</span>
         </div>
         <template v-if="loading">
           <div v-for="i in 12" :key="`sk-${i}`" class="table-row skeleton-row">
-            <span v-for="w in [200,70,70,70]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
+            <span v-for="w in [200,70,70,70,140]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
           </div>
         </template>
         <div v-else v-for="s in filtered" :key="s.name" class="table-row">
@@ -101,6 +177,17 @@ const filtered = computed(() => {
           <span class="badge" :class="`load-${s.load_state}`">{{ s.load_state }}</span>
           <span class="badge" :class="`active-${s.active_state}`">{{ s.active_state }}</span>
           <span class="sub">{{ s.sub_state }}</span>
+          <span class="actions">
+            <button
+              v-for="action in getAvailableActions(s)"
+              :key="action"
+              class="btn-action"
+              :class="`btn-${action}`"
+              @click="requestAction(s.name, action)"
+            >
+              {{ getActionLabel(action) }}
+            </button>
+          </span>
         </div>
         <p v-if="!loading && filtered.length === 0" class="muted">无匹配服务</p>
       </div>
@@ -115,7 +202,7 @@ const filtered = computed(() => {
 .search-input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
 .count { font-size: 13px; white-space: nowrap; }
 .service-table { font-size: 13px; max-height: calc(100vh - 540px); overflow-y: auto; border-radius: 8px; border: 1px solid #eee; }
-.table-head, .table-row { display: grid; grid-template-columns: 1fr 100px 100px 100px; gap: 8px; padding: 6px 8px; align-items: center; }
+.table-head, .table-row { display: grid; grid-template-columns: 1fr 100px 100px 100px 140px; gap: 8px; padding: 6px 8px; align-items: center; }
 .table-head { font-size: 11px; text-transform: uppercase; color: #888; border-bottom: 1px solid #eee; font-weight: 600; position: sticky; top: 0; background: #fffaf2; z-index: 1; }
 .table-row { border-bottom: 1px solid #f5f0ea; }
 .table-row:hover { background: rgba(201,169,110,0.08); }
@@ -130,4 +217,37 @@ const filtered = computed(() => {
 .active-inactive { background: #f5f5f5; color: #757575; }
 .active-failed { background: #ffebee; color: #c62828; }
 .sub { color: #666; font-size: 12px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-action {
+  padding: 4px 10px;
+  font-size: 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+.btn-start {
+  background: #e8f5e9;
+  border-color: #a5d6a7;
+  color: #2e7d32;
+}
+.btn-start:hover {
+  background: #c8e6c9;
+}
+.btn-stop {
+  background: #ffebee;
+  border-color: #ef9a9a;
+  color: #c62828;
+}
+.btn-stop:hover {
+  background: #ffcdd2;
+}
+.btn-restart {
+  background: #e3f2fd;
+  border-color: #90caf9;
+  color: #1565c0;
+}
+.btn-restart:hover {
+  background: #bbdefb;
+}
 </style>

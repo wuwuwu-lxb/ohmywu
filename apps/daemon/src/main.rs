@@ -8,18 +8,22 @@ use axum::{
 };
 use ohmywu_action_registry::ActionRegistry;
 use ohmywu_agent_kernel::AgentKernel;
+use ohmywu_audit::AuditLog;
 use ohmywu_domain::{
     ActionSpec, AgentTemplate, AppSettings, HealthResponse, JournalQuery,
-    ReferenceResolutionRequest, ReferenceResolutionResponse, StorageScanQuery, WorkflowSpec,
+    KillProcessQuery, ReferenceResolutionRequest, ReferenceResolutionResponse,
+    RiskLevel, StorageScanQuery, WorkflowSpec,
 };
 use ohmywu_linux_adapter::LinuxAdapter;
 use ohmywu_reference_resolver::resolve_references;
 use ohmywu_store::InMemoryStore;
+use ohmywu_task_engine::TaskEngine;
 use ohmywu_toolkit_system_management::{
     system_management_action_specs, system_management_agent_templates,
     system_management_workflows,
 };
 use ohmywu_workflow_registry::WorkflowRegistry;
+use serde::Deserialize;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
@@ -29,6 +33,8 @@ struct AppState {
     agents: Arc<AgentKernel>,
     store: Arc<InMemoryStore>,
     linux_adapter: Arc<LinuxAdapter>,
+    task_engine: Arc<TaskEngine>,
+    audit_log: Arc<AuditLog>,
 }
 
 #[tokio::main]
@@ -38,6 +44,8 @@ async fn main() {
     let agents = Arc::new(AgentKernel::from_templates(system_management_agent_templates()));
     let store = Arc::new(InMemoryStore::new(AppSettings::default()));
     let linux_adapter = Arc::new(LinuxAdapter::default());
+    let task_engine = Arc::new(TaskEngine::default());
+    let audit_log = Arc::new(AuditLog::default());
 
     let app_state = AppState {
         actions,
@@ -45,6 +53,8 @@ async fn main() {
         agents,
         store,
         linux_adapter,
+        task_engine,
+        audit_log,
     };
 
     let cors = CorsLayer::new()
@@ -64,6 +74,14 @@ async fn main() {
         .route("/api/services", get(list_services))
         .route("/api/storage/scans", post(scan_storage))
         .route("/api/logs/journal", post(read_journal))
+        .route("/api/tasks", get(list_tasks))
+        .route("/api/tasks/:id", get(get_task))
+        .route("/api/audits", get(list_audits))
+        // ── M3: Write Operation Routes ───────────────────────────────────────
+        .route("/api/processes/:pid/kill", post(kill_process))
+        .route("/api/services/:name/start", post(start_service))
+        .route("/api/services/:name/stop", post(stop_service))
+        .route("/api/services/:name/restart", post(restart_service))
         .with_state(app_state)
         .layer(cors);
 
@@ -134,7 +152,7 @@ async fn system_overview() -> Json<serde_json::Value> {
         .unwrap_or(0.0);
     let uptime_days = uptime_secs / 86400.0;
     let uptime_hours = (uptime_secs % 86400.0) / 3600.0;
-    let uptime = format!("{:.1} 天 · {:.1} 小时", uptime_days, uptime_hours);
+    let uptime = format!("{:.1} days . {:.1} hours", uptime_days, uptime_hours);
 
     let cpu_model = std::fs::read_to_string("/proc/cpuinfo")
         .ok()
@@ -225,4 +243,166 @@ async fn read_journal(
     Json(query): Json<JournalQuery>,
 ) -> Json<Vec<ohmywu_domain::JournalEntry>> {
     Json(state.linux_adapter.read_journal(query).await)
+}
+
+async fn list_tasks(State(state): State<AppState>) -> Json<Vec<ohmywu_domain::Task>> {
+    Json(state.task_engine.list_tasks())
+}
+
+async fn get_task(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(state): State<AppState>,
+) -> Json<Option<ohmywu_domain::Task>> {
+    Json(state.task_engine.get_task(&id))
+}
+
+async fn list_audits(
+    axum::extract::Query(limit): axum::extract::Query<AuditQuery>,
+    State(state): State<AppState>,
+) -> Json<Vec<ohmywu_domain::AuditEvent>> {
+    let limit = limit.limit.unwrap_or(100);
+    Json(state.audit_log.list(limit))
+}
+
+#[derive(Debug, Deserialize)]
+struct AuditQuery {
+    limit: Option<usize>,
+}
+
+// ── M3: Write Operation Handlers ─────────────────────────────────────────────
+
+async fn kill_process(
+    State(state): State<AppState>,
+    Json(query): Json<KillProcessQuery>,
+) -> Result<Json<serde_json::Value>, String> {
+    let task_id = state.task_engine.new_task("kill_process", &query.pid.to_string());
+    let result = state.linux_adapter.kill_process(query.pid);
+    match result {
+        Ok(()) => {
+            state.task_engine.complete(&task_id, "success");
+            state.audit_log.record(
+                "user",
+                "kill_process",
+                &query.pid.to_string(),
+                RiskLevel::HighRisk,
+                "success",
+                None,
+            );
+            Ok(Json(serde_json::json!({ "success": true, "pid": query.pid })))
+        }
+        Err(e) => {
+            state.task_engine.fail(&task_id, &e);
+            state.audit_log.record(
+                "user",
+                "kill_process",
+                &query.pid.to_string(),
+                RiskLevel::HighRisk,
+                "failure",
+                Some(&e),
+            );
+            Err(e)
+        }
+    }
+}
+
+async fn start_service(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, String> {
+    let task_id = state.task_engine.new_task("start_service", &name);
+    let result = state.linux_adapter.start_service(&name).await;
+    match result {
+        Ok(()) => {
+            state.task_engine.complete(&task_id, "success");
+            state.audit_log.record(
+                "user",
+                "start_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "success",
+                None,
+            );
+            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+        }
+        Err(e) => {
+            state.task_engine.fail(&task_id, &e);
+            state.audit_log.record(
+                "user",
+                "start_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "failure",
+                Some(&e),
+            );
+            Err(e)
+        }
+    }
+}
+
+async fn stop_service(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, String> {
+    let task_id = state.task_engine.new_task("stop_service", &name);
+    let result = state.linux_adapter.stop_service(&name).await;
+    match result {
+        Ok(()) => {
+            state.task_engine.complete(&task_id, "success");
+            state.audit_log.record(
+                "user",
+                "stop_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "success",
+                None,
+            );
+            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+        }
+        Err(e) => {
+            state.task_engine.fail(&task_id, &e);
+            state.audit_log.record(
+                "user",
+                "stop_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "failure",
+                Some(&e),
+            );
+            Err(e)
+        }
+    }
+}
+
+async fn restart_service(
+    State(state): State<AppState>,
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, String> {
+    let task_id = state.task_engine.new_task("restart_service", &name);
+    let result = state.linux_adapter.restart_service(&name).await;
+    match result {
+        Ok(()) => {
+            state.task_engine.complete(&task_id, "success");
+            state.audit_log.record(
+                "user",
+                "restart_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "success",
+                None,
+            );
+            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+        }
+        Err(e) => {
+            state.task_engine.fail(&task_id, &e);
+            state.audit_log.record(
+                "user",
+                "restart_service",
+                &name,
+                RiskLevel::ControlledWrite,
+                "failure",
+                Some(&e),
+            );
+            Err(e)
+        }
+    }
 }

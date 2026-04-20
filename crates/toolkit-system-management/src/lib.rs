@@ -45,6 +45,39 @@ pub fn system_management_action_specs() -> Vec<ActionSpec> {
             risk_level: RiskLevel::ReadOnly,
             target: ActionTarget::Tool("read_journal".to_string()),
         },
+        // ── M3: Write Operations ───────────────────────────────────────────────
+        ActionSpec {
+            name: "kill_process".to_string(),
+            title: "Kill Process".to_string(),
+            summary: "Terminate a process by PID.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::HighRisk,
+            target: ActionTarget::Tool("kill_process".to_string()),
+        },
+        ActionSpec {
+            name: "start_service".to_string(),
+            title: "Start Service".to_string(),
+            summary: "Start a systemd service.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
+            target: ActionTarget::Tool("start_service".to_string()),
+        },
+        ActionSpec {
+            name: "stop_service".to_string(),
+            title: "Stop Service".to_string(),
+            summary: "Stop a systemd service.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
+            target: ActionTarget::Tool("stop_service".to_string()),
+        },
+        ActionSpec {
+            name: "restart_service".to_string(),
+            title: "Restart Service".to_string(),
+            summary: "Restart a systemd service.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
+            target: ActionTarget::Tool("restart_service".to_string()),
+        },
     ]
 }
 
@@ -79,6 +112,31 @@ pub fn system_management_tool_specs() -> Vec<ToolSpec> {
             title: "Read Journal".to_string(),
             summary: "Read systemd journal entries.".to_string(),
             risk_level: RiskLevel::ReadOnly,
+        },
+        // ── M3: Write Operations ───────────────────────────────────────────────
+        ToolSpec {
+            name: "kill_process".to_string(),
+            title: "Kill Process".to_string(),
+            summary: "Terminate a process by PID using kill.".to_string(),
+            risk_level: RiskLevel::HighRisk,
+        },
+        ToolSpec {
+            name: "start_service".to_string(),
+            title: "Start Service".to_string(),
+            summary: "Start a systemd service via systemctl.".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
+        },
+        ToolSpec {
+            name: "stop_service".to_string(),
+            title: "Stop Service".to_string(),
+            summary: "Stop a systemd service via systemctl.".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
+        },
+        ToolSpec {
+            name: "restart_service".to_string(),
+            title: "Restart Service".to_string(),
+            summary: "Restart a systemd service via systemctl.".to_string(),
+            risk_level: RiskLevel::ControlledWrite,
         },
     ]
 }

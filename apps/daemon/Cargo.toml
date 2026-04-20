@@ -12,9 +12,11 @@ tokio.workspace = true
 tower-http.workspace = true
 ohmywu-action-registry = { path = "../../crates/action-registry" }
 ohmywu-agent-kernel = { path = "../../crates/agent-kernel" }
+ohmywu-audit = { path = "../../crates/audit" }
 ohmywu-domain = { path = "../../crates/domain" }
 ohmywu-reference-resolver = { path = "../../crates/reference-resolver" }
 ohmywu-store = { path = "../../crates/store" }
+ohmywu-task-engine = { path = "../../crates/task-engine" }
 ohmywu-toolkit-system-management = { path = "../../crates/toolkit-system-management" }
 ohmywu-linux-adapter = { path = "../../crates/linux-adapter" }
 ohmywu-command-runner = { path = "../../crates/command-runner" }

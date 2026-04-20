@@ -135,3 +135,25 @@ export function fetchJournal(query: JournalQuery) {
     body: JSON.stringify(query),
   })
 }
+
+export type ServiceAction = 'start' | 'stop' | 'restart'
+
+async function postVoid(path: string): Promise<void> {
+  const response = await fetch(`${daemonOrigin}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  })
+  if (!response.ok) {
+    throw new Error(`request failed: ${response.status}`)
+  }
+}
+
+export async function killProcess(pid: number): Promise<void> {
+  await postVoid(`/api/processes/${pid}/kill`)
+}
+
+export async function controlService(name: string, action: ServiceAction): Promise<void> {
+  await postVoid(`/api/services/${name}/${action}`)
+}

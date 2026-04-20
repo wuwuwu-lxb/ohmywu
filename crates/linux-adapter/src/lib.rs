@@ -254,6 +254,56 @@ impl LinuxAdapter {
             })
             .collect()
     }
+
+    // ── M3: Write Operations ───────────────────────────────────────────────────
+
+    /// Kill a process by PID using the kill command
+    pub fn kill_process(&self, pid: u64) -> Result<(), String> {
+        let output = std::process::Command::new("kill")
+            .arg(pid.to_string())
+            .output()
+            .map_err(|e| format!("failed to execute kill: {}", e))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("kill failed: {}", stderr))
+        }
+    }
+
+    /// Start a systemd service
+    pub async fn start_service(&self, name: &str) -> Result<(), String> {
+        let runner = CommandRunner::default();
+        let output = runner.run("systemctl", &["start", name], Some(30)).await;
+        if output.exit_code == 0 {
+            Ok(())
+        } else {
+            Err(format!("failed to start {}: {}", name, output.stderr))
+        }
+    }
+
+    /// Stop a systemd service
+    pub async fn stop_service(&self, name: &str) -> Result<(), String> {
+        let runner = CommandRunner::default();
+        let output = runner.run("systemctl", &["stop", name], Some(30)).await;
+        if output.exit_code == 0 {
+            Ok(())
+        } else {
+            Err(format!("failed to stop {}: {}", name, output.stderr))
+        }
+    }
+
+    /// Restart a systemd service
+    pub async fn restart_service(&self, name: &str) -> Result<(), String> {
+        let runner = CommandRunner::default();
+        let output = runner.run("systemctl", &["restart", name], Some(30)).await;
+        if output.exit_code == 0 {
+            Ok(())
+        } else {
+            Err(format!("failed to restart {}: {}", name, output.stderr))
+        }
+    }
 }
 
 fn human_size(bytes: u64) -> String {

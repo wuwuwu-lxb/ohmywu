@@ -1,8 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, provide } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
+import Toast from '@/components/Toast.vue'
 
 const mode = ref<'user' | 'agent'>('user')
+const toasts = ref<Array<{ id: number; message: string; type: 'success' | 'error' | 'info' }>>([])
+let toastId = 0
 
 function toggleMode() {
   if (mode.value === 'user') {
@@ -11,6 +14,16 @@ function toggleMode() {
     mode.value = 'user'
   }
 }
+
+function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
+  const id = ++toastId
+  toasts.value.push({ id, message, type })
+  setTimeout(() => {
+    toasts.value = toasts.value.filter((t) => t.id !== id)
+  }, 3500)
+}
+
+provide('toast', showToast)
 </script>
 
 <template>
@@ -65,6 +78,16 @@ function toggleMode() {
     <main class="content">
       <RouterView />
     </main>
+
+    <!-- Toast container -->
+    <div class="toast-container">
+      <Toast
+        v-for="toast in toasts"
+        :key="toast.id"
+        :message="toast.message"
+        :type="toast.type"
+      />
+    </div>
   </div>
 </template>
 
@@ -96,5 +119,17 @@ function toggleMode() {
 .mode-btn.disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+</style>
+
+<style>
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 99999;
 }
 </style>

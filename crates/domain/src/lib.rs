@@ -81,8 +81,7 @@ pub struct AgentInstance {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
-    Draft,
-    Queued,
+    Pending,
     Running,
     Completed,
     Failed,
@@ -91,17 +90,24 @@ pub enum TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: Uuid,
-    pub title: String,
+    pub action: String,
+    pub target: String,
     pub status: TaskStatus,
     pub created_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub result: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
     pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
     pub actor: String,
-    pub summary: String,
-    pub created_at: DateTime<Utc>,
+    pub action: String,
+    pub target: String,
+    pub risk_level: RiskLevel,
+    pub result: String,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,4 +225,35 @@ pub struct JournalQuery {
     pub priority: Option<i32>,
     pub lines: Option<usize>,
     pub since: Option<DateTime<Utc>>,
+}
+
+// ── M3: Write Operation Queries ───────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KillProcessQuery {
+    pub pid: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServiceControlQuery {
+    pub name: String,
+    pub action: ServiceAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupPreviewQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupExecuteQuery {
+    pub plan_id: String,
 }
