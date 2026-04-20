@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, ref, nextTick } from 'vue'
 import { fetchActions, fetchHealth, fetchProcesses, fetchSystemOverview, type HealthResponse, type ProcessInfo } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import * as echarts from 'echarts'
@@ -9,6 +9,7 @@ const actionCount = ref<number>(0)
 const systemOverview = ref<Record<string, string>>({})
 const error = ref<string | null>(null)
 const loading = ref(true)
+const hasLoadedOnce = ref(false)
 
 const processes = ref<ProcessInfo[]>([])
 const cpuRef = ref<HTMLDivElement | null>(null)
@@ -17,7 +18,55 @@ let cpuChart: echarts.ECharts | null = null
 let memChart: echarts.ECharts | null = null
 let timer: ReturnType<typeof setInterval> | null = null
 
-onMounted(async () => {
+function resizeCharts() {
+  cpuChart?.resize()
+  memChart?.resize()
+}
+
+function startPolling() {
+  if (!timer) {
+    timer = setInterval(() => {
+      void refreshDashboard()
+    }, 5000)
+  }
+}
+
+function stopPolling() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+onActivated(async () => {
+  window.removeEventListener('chart-resize', resizeCharts)
+  window.addEventListener('chart-resize', resizeCharts)
+  startPolling()
+
+  if (hasLoadedOnce.value) {
+    await nextTick()
+    renderCharts()
+    resizeCharts()
+    void refreshDashboard()
+    return
+  }
+
+  await refreshDashboard()
+})
+
+onDeactivated(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
+})
+
+onUnmounted(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
+  cpuChart?.dispose()
+  memChart?.dispose()
+})
+
+async function loadOverviewData() {
   try {
     const [healthResponse, actions, overview] = await Promise.all([
       fetchHealth(),
@@ -27,26 +76,25 @@ onMounted(async () => {
     health.value = healthResponse
     actionCount.value = actions.length
     systemOverview.value = overview
+    error.value = null
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : '连接 daemon 失败'
-  } finally {
-    loading.value = false
   }
-  await loadProcesses()
-  timer = setInterval(loadProcesses, 5000)
-})
-
-onUnmounted(() => {
-  if (timer) clearInterval(timer)
-  cpuChart?.dispose()
-  memChart?.dispose()
-})
+}
 
 async function loadProcesses() {
   try {
     processes.value = await fetchProcesses()
-    renderCharts()
   } catch {}
+}
+
+async function refreshDashboard() {
+  await Promise.all([loadOverviewData(), loadProcesses()])
+  loading.value = false
+  hasLoadedOnce.value = true
+  await nextTick()
+  renderCharts()
+  resizeCharts()
 }
 
 function renderCharts() {
@@ -59,19 +107,19 @@ function renderCharts() {
   if (cpuChart) cpuChart.setOption({
     title: { text: 'CPU 占用 TOP 10', textStyle: { fontSize: 13, fontWeight: '600', color: '#1a1612' }, left: 0, top: 4 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 36, left: 0, right: 16, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'category', data: cpuTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11 }, inverse: true },
-    series: [{ type: 'bar', data: cpuTop.map(p => parseFloat(p.cpu_percent.toFixed(1))), itemStyle: { color: '#c85a2e', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 20 }],
+    grid: { top: 36, left: 16, right: 16, bottom: 56, containLabel: true },
+    xAxis: { type: 'category', data: cpuTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11, interval: 0, rotate: 20 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    series: [{ type: 'bar', data: cpuTop.map(p => parseFloat(p.cpu_percent.toFixed(1))), itemStyle: { color: '#c85a2e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 28 }],
   })
 
   if (memChart) memChart.setOption({
     title: { text: '内存占用 TOP 10', textStyle: { fontSize: 13, fontWeight: '600', color: '#1a1612' }, left: 0, top: 4 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 36, left: 0, right: 16, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'category', data: memTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11 }, inverse: true },
-    series: [{ type: 'bar', data: memTop.map(p => p.memory_kb), itemStyle: { color: '#c9a96e', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 20 }],
+    grid: { top: 36, left: 16, right: 16, bottom: 56, containLabel: true },
+    xAxis: { type: 'category', data: memTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11, interval: 0, rotate: 20 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    series: [{ type: 'bar', data: memTop.map(p => p.memory_kb), itemStyle: { color: '#c9a96e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 28 }],
   })
 }
 
@@ -140,8 +188,8 @@ const labelMap: Record<string, string> = {
 </template>
 
 <style scoped>
-.charts-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.chart-card { background: var(--panel-strong, #fffaf2); border: 1px solid rgba(74,55,39,0.14); border-radius: 16px; padding: 12px; }
+.charts-row { flex: 1 1 100%; width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.chart-card { flex: 1 1 100%; width: 100%; min-width: 0; background: var(--panel-strong, #fffaf2); border: 1px solid rgba(74,55,39,0.14); border-radius: 16px; padding: 12px; }
 .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin-top: 12px; }
 .overview-item { display: flex; flex-direction: column; padding: 8px 12px; background: rgba(255,255,255,0.4); border-radius: 6px; }
 .overview-key { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; }

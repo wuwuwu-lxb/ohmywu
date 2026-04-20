@@ -39,7 +39,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
 
   if (!response.ok) {
-    throw new Error(`request failed: ${response.status}`)
+    const text = await response.text()
+    throw new Error(text || `request failed: ${response.status}`)
+  }
+
+  const contentType = response.headers.get('content-type')
+  if (!contentType?.includes('application/json')) {
+    throw new Error('Invalid response format')
   }
 
   return response.json() as Promise<T>
@@ -156,4 +162,99 @@ export async function killProcess(pid: number): Promise<void> {
 
 export async function controlService(name: string, action: ServiceAction): Promise<void> {
   await postVoid(`/api/services/${name}/${action}`)
+}
+
+// ── M3: Storage Cleanup ────────────────────────────────────────────────────────
+
+export type CleanupItem = {
+  path: string
+  size_bytes: number
+  human_size: string
+  category: 'cache' | 'temp' | 'log' | 'package_cache' | 'toolchain' | 'large_dir' | 'other'
+  reason: string
+  risk: 'safe' | 'risky'
+  risk_reason: string
+  executable: boolean
+  execution_block_reason: string
+}
+
+export type CleanupPreviewResult = {
+  items: CleanupItem[]
+  total_bytes: number
+  human_total: string
+  scanned_path: string
+}
+
+export async function fetchCleanupPreview(preset: 'common' | 'custom', path?: string): Promise<CleanupPreviewResult> {
+  return request<CleanupPreviewResult>('/api/cleanup/preview', {
+    method: 'POST',
+    body: JSON.stringify({ preset, path }),
+  })
+}
+
+export async function executeCleanup(paths: string[]): Promise<{ freed_bytes: number }> {
+  return request<{ freed_bytes: number }>('/api/cleanup/execute', {
+    method: 'POST',
+    body: JSON.stringify({ paths }),
+  })
+}
+
+export type CleanupNode = {
+  path: string
+  name: string
+  size_bytes: number
+  human_size: string
+  category: string
+  level: string
+  reason: string
+  children?: CleanupNode[]
+}
+
+export type CleanupTreeResult = {
+  root: CleanupNode
+  total_bytes: number
+  human_total: string
+}
+
+export async function fetchCleanupTree(): Promise<CleanupTreeResult> {
+  return request<CleanupTreeResult>('/api/cleanup/tree', {
+    method: 'POST',
+    body: JSON.stringify({}),
+  })
+}
+
+export async function fetchScanPath(path: string): Promise<CleanupTreeResult> {
+  return request<CleanupTreeResult>('/api/cleanup/scan-path', {
+    method: 'POST',
+    body: JSON.stringify({ path }),
+  })
+}
+
+export type Task = {
+  id: string
+  action: string
+  target: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  created_at: string
+  completed_at: string | null
+  result: string | null
+}
+
+export type AuditEvent = {
+  id: string
+  timestamp: string
+  actor: string
+  action: string
+  target: string
+  risk_level: 'read_only' | 'controlled_write' | 'high_risk'
+  result: string
+  detail: string | null
+}
+
+export function fetchTasks(): Promise<Task[]> {
+  return request<Task[]>('/api/tasks')
+}
+
+export function fetchAudits(limit = 100): Promise<AuditEvent[]> {
+  return request<AuditEvent[]>(`/api/audits?limit=${limit}`)
 }

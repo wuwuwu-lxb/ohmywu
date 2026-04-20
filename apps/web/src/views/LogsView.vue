@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, ref, watch, nextTick } from 'vue'
 import { fetchJournal, type JournalEntry } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import * as echarts from 'echarts'
@@ -8,25 +8,71 @@ const entries = ref<JournalEntry[]>([])
 const error = ref<string | null>(null)
 const lines = ref(50)
 const loading = ref(true)
+const hasLoadedOnce = ref(false)
+let timer: ReturnType<typeof setInterval> | null = null
 
 const pieRef = ref<HTMLDivElement | null>(null)
 const barRef = ref<HTMLDivElement | null>(null)
 let pieChart: echarts.ECharts | null = null
 let barChart: echarts.ECharts | null = null
 
-onMounted(async () => {
-  await load()
+function resizeCharts() {
+  pieChart?.resize()
+  barChart?.resize()
+}
+
+function startPolling() {
+  if (!timer) {
+    timer = setInterval(() => {
+      void load(false)
+    }, 30000)
+  }
+}
+
+function stopPolling() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+onActivated(async () => {
+  window.removeEventListener('chart-resize', resizeCharts)
+  window.addEventListener('chart-resize', resizeCharts)
+  startPolling()
+
+  if (hasLoadedOnce.value) {
+    await nextTick()
+    renderCharts()
+    resizeCharts()
+    void load(false)
+    return
+  }
+
+  await load(true)
+})
+
+onDeactivated(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
 })
 
 onUnmounted(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
   pieChart?.dispose()
   barChart?.dispose()
 })
 
-async function load() {
-  loading.value = true
+async function load(showLoading = false) {
+  if (showLoading && !hasLoadedOnce.value) {
+    loading.value = true
+  }
+
   try {
     entries.value = await fetchJournal({ lines: lines.value })
+    error.value = null
+    hasLoadedOnce.value = true
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
@@ -34,15 +80,17 @@ async function load() {
   }
 }
 
-watch(entries, (val) => {
-  if (val.length && !loading.value) renderCharts()
+watch(entries, async (val) => {
+  if (!val.length || loading.value) return
+  await nextTick()
+  renderCharts()
+  resizeCharts()
 })
 
 function renderCharts() {
   if (pieRef.value && !pieChart) pieChart = echarts.init(pieRef.value)
   if (barRef.value && !barChart) barChart = echarts.init(barRef.value)
 
-  // Priority pie
   const priCounts: Record<number, number> = {}
   entries.value.forEach(e => { priCounts[e.priority] = (priCounts[e.priority] || 0) + 1 })
   const priPalette: Record<number, string> = { 0: '#c62828', 1: '#e53935', 2: '#f57f17', 3: '#d32f2f', 4: '#f9a825', 5: '#388e3c', 6: '#1976d2', 7: '#757575' }
@@ -60,7 +108,6 @@ function renderCharts() {
     }],
   })
 
-  // Unit bar
   const unitCounts: Record<string, number> = {}
   entries.value.forEach(e => { unitCounts[e.unit] = (unitCounts[e.unit] || 0) + 1 })
   const topUnits = Object.entries(unitCounts).sort((a, b) => b[1] - a[1]).slice(0, 10)
@@ -68,10 +115,10 @@ function renderCharts() {
   if (barChart) barChart.setOption({
     title: { text: '日志数 TOP 10 单位', textStyle: { fontSize: 13, fontWeight: '600', color: '#1a1612' }, left: 0, top: 4 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 36, left: 0, right: 16, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'category', data: topUnits.map(([u]) => u.slice(0, 12)), axisLabel: { fontSize: 10 }, inverse: true },
-    series: [{ type: 'bar', data: topUnits.map(([, c]) => c), itemStyle: { color: '#5c6bc0', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 18 }],
+    grid: { top: 36, left: 16, right: 16, bottom: 56, containLabel: true },
+    xAxis: { type: 'category', data: topUnits.map(([u]) => u.slice(0, 12)), axisLabel: { fontSize: 10, interval: 0, rotate: 20 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    series: [{ type: 'bar', data: topUnits.map(([, c]) => c), itemStyle: { color: '#5c6bc0', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 24 }],
   })
 }
 
@@ -105,9 +152,9 @@ function priorityClass(p: number) {
       <div class="controls">
         <label>
           显示行数
-          <input v-model.number="lines" type="number" min="5" max="200" class="form-input short" @change="load" />
+          <input v-model.number="lines" type="number" min="5" max="200" class="form-input short" @change="() => load(false)" />
         </label>
-        <button class="btn-secondary" @click="load">刷新</button>
+        <button class="btn-secondary" @click="() => load(false)">刷新</button>
       </div>
       <p v-if="error" class="muted">{{ error }}</p>
 
@@ -127,8 +174,8 @@ function priorityClass(p: number) {
 </template>
 
 <style scoped>
-.charts-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
-.chart-card { background: var(--panel-strong, #fffaf2); border: 1px solid rgba(74,55,39,0.14); border-radius: 16px; padding: 12px; }
+.charts-row { flex: 1 1 100%; width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.chart-card { flex: 1 1 100%; width: 100%; min-width: 0; background: var(--panel-strong, #fffaf2); border: 1px solid rgba(74,55,39,0.14); border-radius: 16px; padding: 12px; }
 .controls { display: flex; gap: 12px; align-items: flex-end; margin-bottom: 12px; }
 label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #666; }
 .form-input { padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }

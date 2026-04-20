@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch, computed, inject } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, ref, watch, computed, inject, nextTick } from 'vue'
 import { fetchServices, controlService, type ServiceInfo, type ServiceAction } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -9,8 +9,10 @@ const services = ref<ServiceInfo[]>([])
 const error = ref<string | null>(null)
 const search = ref('')
 const loading = ref(true)
+const hasLoadedOnce = ref(false)
 const pieRef = ref<HTMLDivElement | null>(null)
 let pieChart: echarts.ECharts | null = null
+let timer: ReturnType<typeof setInterval> | null = null
 
 const toast = inject<(message: string, type: 'success' | 'error' | 'info') => void>('toast')
 
@@ -21,13 +23,61 @@ interface ConfirmState {
 
 const confirmTarget = ref<ConfirmState | null>(null)
 
-onMounted(async () => {
-  await load()
+function resizeChart() {
+  pieChart?.resize()
+}
+
+function startPolling() {
+  if (!timer) {
+    timer = setInterval(() => {
+      void load(false)
+    }, 30000)
+  }
+}
+
+function stopPolling() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+onActivated(async () => {
+  window.removeEventListener('chart-resize', resizeChart)
+  window.addEventListener('chart-resize', resizeChart)
+  startPolling()
+
+  if (hasLoadedOnce.value) {
+    await nextTick()
+    renderPie()
+    resizeChart()
+    void load(false)
+    return
+  }
+
+  await load(true)
 })
 
-async function load() {
+onDeactivated(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeChart)
+})
+
+onUnmounted(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeChart)
+  pieChart?.dispose()
+})
+
+async function load(showLoading = false) {
+  if (showLoading && !hasLoadedOnce.value) {
+    loading.value = true
+  }
+
   try {
     services.value = await fetchServices()
+    error.value = null
+    hasLoadedOnce.value = true
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
   } finally {
@@ -35,8 +85,11 @@ async function load() {
   }
 }
 
-watch(services, (val) => {
-  if (val.length && !loading.value) renderPie()
+watch(services, async (val) => {
+  if (!val.length || loading.value) return
+  await nextTick()
+  renderPie()
+  resizeChart()
 })
 
 function renderPie() {
@@ -102,7 +155,7 @@ async function confirmAction() {
   try {
     await controlService(name, action)
     toast?.(`服务 ${name} 已${action === 'start' ? '启动' : action === 'stop' ? '停止' : '重启'}`, 'success')
-    await load()
+    await load(false)
   } catch (e) {
     toast?.(`操作失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error')
   }
@@ -196,8 +249,8 @@ function getConfirmMessage(name: string, action: ServiceAction): string {
 </template>
 
 <style scoped>
-.charts-row { display: grid; grid-template-columns: 1fr; }
-.chart-card { background: var(--panel-strong, #fffaf2); border: 1px solid var(--line, rgba(74,55,39,0.14)); border-radius: 16px; padding: 12px; }
+.charts-row { flex: 1 1 100%; width: 100%; min-width: 0; display: grid; grid-template-columns: 1fr; }
+.chart-card { flex: 1 1 100%; width: 100%; min-width: 0; background: var(--panel-strong, #fffaf2); border: 1px solid var(--line, rgba(74,55,39,0.14)); border-radius: 16px; padding: 12px; }
 .search-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .search-input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
 .count { font-size: 13px; white-space: nowrap; }

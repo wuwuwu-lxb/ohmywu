@@ -78,6 +78,23 @@ pub fn system_management_action_specs() -> Vec<ActionSpec> {
             risk_level: RiskLevel::ControlledWrite,
             target: ActionTarget::Tool("restart_service".to_string()),
         },
+        // ── M3: Storage Cleanup ───────────────────────────────────────────────
+        ActionSpec {
+            name: "cleanup_preview".to_string(),
+            title: "Cleanup Preview".to_string(),
+            summary: "Scan for cleanup candidates: cache dirs, stale temp files, old logs.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::ReadOnly,
+            target: ActionTarget::Tool("cleanup_preview".to_string()),
+        },
+        ActionSpec {
+            name: "cleanup_execute".to_string(),
+            title: "Cleanup Execute".to_string(),
+            summary: "Delete user-selected paths to free disk space.".to_string(),
+            domain: "system-management".to_string(),
+            risk_level: RiskLevel::HighRisk,
+            target: ActionTarget::Tool("cleanup_execute".to_string()),
+        },
     ]
 }
 
@@ -137,6 +154,19 @@ pub fn system_management_tool_specs() -> Vec<ToolSpec> {
             title: "Restart Service".to_string(),
             summary: "Restart a systemd service via systemctl.".to_string(),
             risk_level: RiskLevel::ControlledWrite,
+        },
+        // ── M3: Storage Cleanup ───────────────────────────────────────────────
+        ToolSpec {
+            name: "cleanup_preview".to_string(),
+            title: "Cleanup Preview".to_string(),
+            summary: "Scan for cleanup candidates: cache, temp, logs, large hidden dirs.".to_string(),
+            risk_level: RiskLevel::ReadOnly,
+        },
+        ToolSpec {
+            name: "cleanup_execute".to_string(),
+            title: "Cleanup Execute".to_string(),
+            summary: "Delete user-confirmed paths to free disk space.".to_string(),
+            risk_level: RiskLevel::HighRisk,
         },
     ]
 }

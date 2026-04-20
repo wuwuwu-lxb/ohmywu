@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, provide } from 'vue'
+import { ref, provide, onMounted, onUnmounted } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import Toast from '@/components/Toast.vue'
 
@@ -24,6 +24,18 @@ function showToast(message: string, type: 'success' | 'error' | 'info' = 'info')
 }
 
 provide('toast', showToast)
+
+const dispatchChartResize = () => {
+  window.dispatchEvent(new CustomEvent('chart-resize'))
+}
+
+onMounted(() => {
+  window.addEventListener('resize', dispatchChartResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', dispatchChartResize)
+})
 </script>
 
 <template>
@@ -76,7 +88,11 @@ provide('toast', showToast)
     </aside>
 
     <main class="content">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <KeepAlive>
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </main>
 
     <!-- Toast container -->

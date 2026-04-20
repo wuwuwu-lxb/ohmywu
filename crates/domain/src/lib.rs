@@ -249,11 +249,73 @@ pub struct ServiceControlQuery {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CleanupPreset {
+    Common,
+    Custom,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupPreviewQuery {
+    pub preset: CleanupPreset,
+    pub path: Option<String>,
+}
+
+// ── M3: Storage Cleanup ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupItem {
     pub path: String,
+    pub size_bytes: u64,
+    pub human_size: String,
+    pub category: String,  // cache/temp/log/package_cache/toolchain/large_dir/other
+    pub reason: String,
+    pub risk: String,       // "safe" | "risky"
+    pub risk_reason: String,
+    pub executable: bool,
+    pub execution_block_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupPreviewResult {
+    pub items: Vec<CleanupItem>,
+    pub total_bytes: u64,
+    pub human_total: String,
+    pub scanned_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupExecuteQuery {
-    pub plan_id: String,
+    pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupScanPathQuery {
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupNode {
+    pub path: String,
+    pub name: String,
+    pub size_bytes: u64,
+    pub human_size: String,
+    pub category: String,
+    pub level: String,
+    pub reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<CleanupNode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupTreeResult {
+    pub root: CleanupNode,
+    pub total_bytes: u64,
+    pub human_total: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WhitelistEntry {
+    pub path: String,
+    pub label: String,
 }

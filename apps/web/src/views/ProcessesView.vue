@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch, inject } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, ref, computed, watch, inject, nextTick } from 'vue'
 import { fetchProcesses, killProcess, type ProcessInfo } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -9,6 +9,7 @@ const processes = ref<ProcessInfo[]>([])
 const error = ref<string | null>(null)
 const search = ref('')
 const loading = ref(true)
+const hasLoadedOnce = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
 const cpuRef = ref<HTMLDivElement | null>(null)
@@ -22,32 +23,77 @@ const toast = inject<(message: string, type: 'success' | 'error' | 'info') => vo
 
 const confirmTarget = ref<{ pid: number; name: string } | null>(null)
 
-onMounted(async () => {
-  await load()
-  timer = setInterval(load, 5000)
+function resizeCharts() {
+  cpuChart?.resize()
+  memChart?.resize()
+  pieChart?.resize()
+}
+
+function startPolling() {
+  if (!timer) {
+    timer = setInterval(() => {
+      void load(false)
+    }, 5000)
+  }
+}
+
+function stopPolling() {
+  if (timer) {
+    clearInterval(timer)
+    timer = null
+  }
+}
+
+onActivated(async () => {
+  window.removeEventListener('chart-resize', resizeCharts)
+  window.addEventListener('chart-resize', resizeCharts)
+  startPolling()
+
+  if (hasLoadedOnce.value) {
+    await nextTick()
+    renderCharts()
+    resizeCharts()
+    void load(false)
+    return
+  }
+
+  await load(true)
+})
+
+onDeactivated(() => {
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
 })
 
 onUnmounted(() => {
-  if (timer) clearInterval(timer)
+  stopPolling()
+  window.removeEventListener('chart-resize', resizeCharts)
   cpuChart?.dispose()
   memChart?.dispose()
   pieChart?.dispose()
 })
 
-async function load() {
+async function load(showLoading = false) {
+  if (showLoading && !hasLoadedOnce.value) {
+    loading.value = true
+  }
+
   try {
     processes.value = await fetchProcesses()
-    loading.value = false
+    error.value = null
+    hasLoadedOnce.value = true
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
+  } finally {
     loading.value = false
   }
 }
 
-watch(processes, (val) => {
-  if (val.length && !loading.value) {
-    renderCharts()
-  }
+watch(processes, async (val) => {
+  if (!val.length || loading.value) return
+  await nextTick()
+  renderCharts()
+  resizeCharts()
 })
 
 function renderCharts() {
@@ -61,19 +107,19 @@ function renderCharts() {
   if (cpuChart) cpuChart.setOption({
     title: { text: 'CPU 占用 TOP 10', textStyle: { fontSize: 13, fontWeight: '600', color: '#1a1612' }, left: 0, top: 4 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 36, left: 0, right: 16, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'category', data: cpuTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11 }, inverse: true },
-    series: [{ type: 'bar', data: cpuTop.map(p => parseFloat(p.cpu_percent.toFixed(1))), itemStyle: { color: '#c85a2e', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 20 }],
+    grid: { top: 36, left: 16, right: 16, bottom: 56, containLabel: true },
+    xAxis: { type: 'category', data: cpuTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11, interval: 0, rotate: 20 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    series: [{ type: 'bar', data: cpuTop.map(p => parseFloat(p.cpu_percent.toFixed(1))), itemStyle: { color: '#c85a2e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 28 }],
   })
 
   if (memChart) memChart.setOption({
     title: { text: '内存占用 TOP 10', textStyle: { fontSize: 13, fontWeight: '600', color: '#1a1612' }, left: 0, top: 4 },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { top: 36, left: 0, right: 16, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', axisLabel: { fontSize: 11 } },
-    yAxis: { type: 'category', data: memTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11 }, inverse: true },
-    series: [{ type: 'bar', data: memTop.map(p => p.memory_kb), itemStyle: { color: '#c9a96e', borderRadius: [0, 4, 4, 0] }, barMaxWidth: 20 }],
+    grid: { top: 36, left: 16, right: 16, bottom: 56, containLabel: true },
+    xAxis: { type: 'category', data: memTop.map(p => p.name.slice(0, 12)), axisLabel: { fontSize: 11, interval: 0, rotate: 20 } },
+    yAxis: { type: 'value', axisLabel: { fontSize: 11 } },
+    series: [{ type: 'bar', data: memTop.map(p => p.memory_kb), itemStyle: { color: '#c9a96e', borderRadius: [4, 4, 0, 0] }, barMaxWidth: 28 }],
   })
 
   if (pieChart) {
@@ -111,7 +157,7 @@ async function confirmKill() {
   try {
     await killProcess(pid)
     toast?.(`进程 ${name} (PID: ${pid}) 已结束`, 'success')
-    await load()
+    await load(false)
   } catch (e) {
     toast?.(`结束进程失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error')
   }
@@ -153,7 +199,7 @@ function cancelKill() {
       <div class="search-bar">
         <input v-model="search" type="text" placeholder="搜索进程名、命令或 PID…" class="search-input" />
         <span class="muted count">{{ filtered.length }} 个进程</span>
-        <button class="btn-icon" @click="load" title="刷新">↻</button>
+        <button class="btn-icon" @click="() => load(false)" title="刷新">↻</button>
       </div>
 
       <p v-if="error" class="muted">{{ error }}</p>
@@ -186,8 +232,8 @@ function cancelKill() {
 </template>
 
 <style scoped>
-.charts-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
-.chart-card { background: var(--panel-strong, #fffaf2); border: 1px solid var(--line, rgba(74,55,39,0.14)); border-radius: 16px; padding: 12px; }
+.charts-row { flex: 1 1 100%; width: 100%; min-width: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.chart-card { flex: 1 1 100%; width: 100%; min-width: 0; background: var(--panel-strong, #fffaf2); border: 1px solid var(--line, rgba(74,55,39,0.14)); border-radius: 16px; padding: 12px; }
 .search-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
 .search-input { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px; }
 .btn-icon { width: 32px; height: 32px; border: 1px solid #ddd; border-radius: 8px; background: #fff; cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center; }

@@ -1144,7 +1144,7 @@ M1 结束时，应该看到这些东西：
 
 - 结束进程
 - 服务启停 / 重启
-- 清理预览与执行（🔲 待做）
+- 清理预览与执行
 - 任务状态更新
 - 审计记录落地
 
@@ -1153,7 +1153,19 @@ M1 结束时，应该看到这些东西：
 - 至少 3 类真实操作跑通
 - 每个操作都有任务记录和审计记录
 
-**状态：🔲 进行中（kill + 服务启停 + TaskEngine + AuditLog 已完成；清理预览待做）**
+**状态：✅ 完成（kill + 服务启停 + 清理预览执行 + TaskEngine + AuditLog 全链路）**
+
+**Sprint 补全（2026-04-20）—— Bug修复 + 清理 UX 重构：**
+
+- [x] kill_process 路由 bug：pid 从 URL path 提取，不再要求 body
+- [x] 清理功能重构：tree model + 级联勾选 + `selectedForExecute` 只传叶子路径，消除父子同删导致的 path not found
+- [x] 清理可执行边界：`executable` + `execution_block_reason` 字段，前后端统一"可展示 ≠ 可执行"
+- [x] 工具链保护：`is_supported_directory_cleanup_target` 白名单，非白名单目录 `cleanup_execute` 返回 400
+- [x] 错误协议修复：`cleanup_execute` 返回 `(StatusCode, String)` 而非 `Err(String)`，消除前端 "Invalid response format"
+- [x] 图表修复：StorageView/LogsView/ProcessesView/OverviewView 统一 layout + resize + lifecycle
+- [x] 图表方向：所有柱状图改为垂直立柱，饼图不变
+- [ ] Tasks/Audits 页面接真实 API + 10s 轮询（待完成）
+- [ ] M4 桌面集成（待启动）
 
 ### M4. 桌面集成
 

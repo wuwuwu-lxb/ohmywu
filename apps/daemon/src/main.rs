@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::State,
-    http::Method,
+    http::{Method, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -10,9 +10,10 @@ use ohmywu_action_registry::ActionRegistry;
 use ohmywu_agent_kernel::AgentKernel;
 use ohmywu_audit::AuditLog;
 use ohmywu_domain::{
-    ActionSpec, AgentTemplate, AppSettings, HealthResponse, JournalQuery,
-    KillProcessQuery, ReferenceResolutionRequest, ReferenceResolutionResponse,
-    RiskLevel, StorageScanQuery, WorkflowSpec,
+    ActionSpec, AgentTemplate, AppSettings, CleanupExecuteQuery, CleanupPreviewQuery,
+    CleanupPreviewResult, CleanupScanPathQuery, CleanupTreeResult, HealthResponse, JournalQuery,
+    ReferenceResolutionRequest, ReferenceResolutionResponse, RiskLevel, StorageScanQuery,
+    WorkflowSpec,
 };
 use ohmywu_linux_adapter::LinuxAdapter;
 use ohmywu_reference_resolver::resolve_references;
@@ -82,6 +83,11 @@ async fn main() {
         .route("/api/services/:name/start", post(start_service))
         .route("/api/services/:name/stop", post(stop_service))
         .route("/api/services/:name/restart", post(restart_service))
+        // ── M3: Storage Cleanup Routes ────────────────────────────────────────
+        .route("/api/cleanup/preview", post(cleanup_preview))
+        .route("/api/cleanup/tree", post(cleanup_tree))
+        .route("/api/cleanup/scan-path", post(cleanup_scan_path))
+        .route("/api/cleanup/execute", post(cleanup_execute))
         .with_state(app_state)
         .layer(cors);
 
@@ -273,29 +279,29 @@ struct AuditQuery {
 
 async fn kill_process(
     State(state): State<AppState>,
-    Json(query): Json<KillProcessQuery>,
+    axum::extract::Path(pid): axum::extract::Path<u64>,
 ) -> Result<Json<serde_json::Value>, String> {
-    let task_id = state.task_engine.new_task("kill_process", &query.pid.to_string());
-    let result = state.linux_adapter.kill_process(query.pid);
+    let task_id = state.task_engine.new_task("kill_process", &pid.to_string());
+    let result = state.linux_adapter.kill_process(pid);
     match result {
         Ok(()) => {
             state.task_engine.complete(&task_id, "success");
             state.audit_log.record(
                 "user",
                 "kill_process",
-                &query.pid.to_string(),
+                &pid.to_string(),
                 RiskLevel::HighRisk,
                 "success",
                 None,
             );
-            Ok(Json(serde_json::json!({ "success": true, "pid": query.pid })))
+            Ok(Json(serde_json::json!({ "success": true, "pid": pid })))
         }
         Err(e) => {
             state.task_engine.fail(&task_id, &e);
             state.audit_log.record(
                 "user",
                 "kill_process",
-                &query.pid.to_string(),
+                &pid.to_string(),
                 RiskLevel::HighRisk,
                 "failure",
                 Some(&e),
@@ -403,6 +409,94 @@ async fn restart_service(
                 Some(&e),
             );
             Err(e)
+        }
+    }
+}
+
+// ── M3: Storage Cleanup Handlers ─────────────────────────────────────────────
+
+async fn cleanup_preview(
+    State(state): State<AppState>,
+    Json(query): Json<CleanupPreviewQuery>,
+) -> Json<CleanupPreviewResult> {
+    let task_id = state.task_engine.new_task("cleanup_preview", query.path.as_deref().unwrap_or("common"));
+    let result = state.linux_adapter.cleanup_preview(query).await;
+    state.task_engine.complete(&task_id, "success");
+    state.audit_log.record(
+        "user",
+        "cleanup_preview",
+        result.scanned_path.as_str(),
+        RiskLevel::ReadOnly,
+        "success",
+        None,
+    );
+    Json(result)
+}
+
+async fn cleanup_tree(State(state): State<AppState>) -> Json<CleanupTreeResult> {
+    let task_id = state.task_engine.new_task("cleanup_tree", "main");
+    let result = state.linux_adapter.cleanup_tree().await;
+    state.task_engine.complete(&task_id, "success");
+    state.audit_log.record(
+        "user",
+        "cleanup_tree",
+        "/",
+        RiskLevel::ReadOnly,
+        "success",
+        None,
+    );
+    Json(result)
+}
+
+async fn cleanup_scan_path(
+    State(state): State<AppState>,
+    Json(query): Json<CleanupScanPathQuery>,
+) -> Json<CleanupTreeResult> {
+    let task_id = state.task_engine.new_task("cleanup_scan_path", "main");
+    let result = state.linux_adapter.cleanup_scan_path(&query.path).await;
+    state.task_engine.complete(&task_id, "success");
+    state.audit_log.record(
+        "user",
+        "cleanup_scan_path",
+        query.path.as_str(),
+        RiskLevel::ReadOnly,
+        "success",
+        None,
+    );
+    Json(result)
+}
+
+async fn cleanup_execute(
+    State(state): State<AppState>,
+    Json(query): Json<CleanupExecuteQuery>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let target = format!("{} paths", query.paths.len());
+    let task_id = state.task_engine.new_task("cleanup_execute", &target);
+    let result = state.linux_adapter.cleanup_execute(query).await;
+    match result {
+        Ok(freed_bytes) => {
+            state.task_engine.complete(&task_id, "success");
+            state.audit_log.record(
+                "user",
+                "cleanup_execute",
+                &target,
+                RiskLevel::HighRisk,
+                "success",
+                Some(&format!("freed {} bytes", freed_bytes)),
+            );
+            Ok(Json(serde_json::json!({ "freed_bytes": freed_bytes })))
+        }
+        Err(e) => {
+            state.task_engine.fail(&task_id, &e);
+            state.audit_log.record(
+                "user",
+                "cleanup_execute",
+                &target,
+                RiskLevel::HighRisk,
+                "failure",
+                Some(&e),
+            );
+            Err((StatusCode::BAD_REQUEST, e))
         }
     }
 }
