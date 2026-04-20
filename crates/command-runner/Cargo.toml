@@ -1,0 +1,8 @@
+[package]
+name = "ohmywu-command-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "time"] }

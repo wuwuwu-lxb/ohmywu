@@ -1,0 +1,13 @@
+[package]
+name = "ohmywu-linux-adapter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { workspace = true, features = ["process", "time", "fs"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+ohmywu-domain = { path = "../domain" }
+ohmywu-command-runner = { path = "../command-runner" }

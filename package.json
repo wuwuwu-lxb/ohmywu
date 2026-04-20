@@ -1,0 +1,12 @@
+{
+  "name": "ohmywu",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev:daemon": "cargo run -p ohmywu-daemon",
+    "dev:web": "pnpm --dir apps/web dev",
+    "dev:electron": "pnpm --dir apps/electron dev",
+    "build:web": "pnpm --dir apps/web build"
+  }
+}

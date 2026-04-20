@@ -1,0 +1,9 @@
+[package]
+name = "ohmywu-agent-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ohmywu-domain = { path = "../domain" }
+uuid.workspace = true
