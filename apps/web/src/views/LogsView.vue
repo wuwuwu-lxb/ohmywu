@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { fetchJournal, type JournalEntry } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import * as echarts from 'echarts'
@@ -18,6 +18,11 @@ onMounted(async () => {
   await load()
 })
 
+onUnmounted(() => {
+  pieChart?.dispose()
+  barChart?.dispose()
+})
+
 async function load() {
   loading.value = true
   try {
@@ -29,9 +34,9 @@ async function load() {
   }
 }
 
-watch(entries, () => {
-  if (!loading.value) setTimeout(renderCharts, 50)
-}, { deep: true })
+watch(entries, (val) => {
+  if (val.length && !loading.value) renderCharts()
+})
 
 function renderCharts() {
   if (pieRef.value && !pieChart) pieChart = echarts.init(pieRef.value)

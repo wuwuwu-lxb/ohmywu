@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref, watch, computed } from 'vue'
 import { fetchServices, type ServiceInfo } from '@/lib/api'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import * as echarts from 'echarts'
@@ -25,14 +25,8 @@ async function load() {
   }
 }
 
-watch(services, () => {
-  if (!loading.value) renderPie()
-}, { deep: true })
-
-watch(loading, (v) => {
-  if (!v) {
-    setTimeout(renderPie, 50)
-  }
+watch(services, (val) => {
+  if (val.length && !loading.value) renderPie()
 })
 
 function renderPie() {
@@ -64,11 +58,11 @@ function renderPie() {
   })
 }
 
-const filtered = () => {
+const filtered = computed(() => {
   if (!search.value) return services.value
   const q = search.value.toLowerCase()
   return services.value.filter((s) => s.name.toLowerCase().includes(q))
-}
+})
 </script>
 
 <template>
@@ -88,7 +82,7 @@ const filtered = () => {
     <article class="panel full">
       <div class="search-bar">
         <input v-model="search" type="text" placeholder="搜索服务名…" class="search-input" />
-        <span class="muted count">{{ filtered().length }} 个服务</span>
+        <span class="muted count">{{ filtered.length }} 个服务</span>
       </div>
 
       <p v-if="error" class="muted">{{ error }}</p>
@@ -102,13 +96,13 @@ const filtered = () => {
             <span v-for="w in [200,70,70,70]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
           </div>
         </template>
-        <div v-else v-for="s in filtered()" :key="s.name" class="table-row">
+        <div v-else v-for="s in filtered" :key="s.name" class="table-row">
           <span class="name">{{ s.name }}</span>
           <span class="badge" :class="`load-${s.load_state}`">{{ s.load_state }}</span>
           <span class="badge" :class="`active-${s.active_state}`">{{ s.active_state }}</span>
           <span class="sub">{{ s.sub_state }}</span>
         </div>
-        <p v-if="!loading && filtered().length === 0" class="muted">无匹配服务</p>
+        <p v-if="!loading && filtered.length === 0" class="muted">无匹配服务</p>
       </div>
     </article>
   </section>

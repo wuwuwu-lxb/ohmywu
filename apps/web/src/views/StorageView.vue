@@ -28,10 +28,8 @@ async function run() {
 }
 
 watch(result, (val) => {
-  if (val) {
-    setTimeout(renderChart, 50)
-  }
-}, { deep: true })
+  if (val) renderChart()
+})
 
 function renderChart() {
   if (!barRef.value || !result.value) return

@@ -32,18 +32,18 @@ onUnmounted(() => {
 async function load() {
   try {
     processes.value = await fetchProcesses()
+    loading.value = false
   } catch (e) {
     error.value = e instanceof Error ? e.message : '加载失败'
-  } finally {
     loading.value = false
   }
 }
 
-watch(processes, () => {
-  if (!loading.value) {
+watch(processes, (val) => {
+  if (val.length && !loading.value) {
     renderCharts()
   }
-}, { deep: true })
+})
 
 function renderCharts() {
   if (cpuRef.value && !cpuChart) cpuChart = echarts.init(cpuRef.value)
@@ -87,13 +87,13 @@ function renderCharts() {
   }
 }
 
-const filtered = () => {
+const filtered = computed(() => {
   if (!search.value) return processes.value
   const q = search.value.toLowerCase()
   return processes.value.filter(
     (p) => p.name.toLowerCase().includes(q) || p.command.toLowerCase().includes(q) || String(p.pid).includes(q)
   )
-}
+})
 </script>
 
 <template>
@@ -115,7 +115,7 @@ const filtered = () => {
     <article class="panel full">
       <div class="search-bar">
         <input v-model="search" type="text" placeholder="搜索进程名、命令或 PID…" class="search-input" />
-        <span class="muted count">{{ filtered().length }} 个进程</span>
+        <span class="muted count">{{ filtered.length }} 个进程</span>
         <button class="btn-icon" @click="load" title="刷新">↻</button>
       </div>
 
@@ -130,7 +130,7 @@ const filtered = () => {
             <span v-for="w in [50,100,40,50,60,60,200]" :key="w" class="skeleton" :style="`width:${w}px;height:14px`"></span>
           </div>
         </template>
-        <div v-else v-for="p in filtered()" :key="p.pid" class="table-row">
+        <div v-else v-for="p in filtered" :key="p.pid" class="table-row">
           <span class="mono">{{ p.pid }}</span>
           <span class="name">{{ p.name }}</span>
           <span class="state" :class="`state-${p.state}`">{{ p.state }}</span>
@@ -139,7 +139,7 @@ const filtered = () => {
           <span>{{ p.user }}</span>
           <span class="command" :title="p.command">{{ p.command }}</span>
         </div>
-        <p v-if="!loading && filtered().length === 0" class="muted">无匹配进程</p>
+        <p v-if="!loading && filtered.length === 0" class="muted">无匹配进程</p>
       </div>
     </article>
   </section>
