@@ -18,26 +18,54 @@ onMounted(async () => {
 <template>
   <section class="page-grid">
     <article class="panel full">
-      <p class="eyebrow">动作中心</p>
-      <h3>共享 Action 列表</h3>
+      <p class="eyebrow">action surface</p>
+      <h3>稳定能力资产页</h3>
       <p class="muted">
-        这里展示的是用户和 AI 共用的调用表面。后续无论从工具栏还是对话层进入，都会走同一套 Action 定义。
+        这里保留 Action 的独立导航位，强调它是用户模式和未来 Agent 模式共享的能力表面。当前阶段先保留结构位置，后续再承接动态增长的稳定能力池。
       </p>
       <p v-if="error" class="muted">{{ error }}</p>
     </article>
 
-    <div class="action-grid">
-      <article v-for="action in actions" :key="action.name" class="action-card">
-        <div>
-          <p class="eyebrow">{{ action.domain }}</p>
-          <h3>{{ action.title }}</h3>
-        </div>
-        <p>{{ action.summary }}</p>
-        <p><code>/{{ action.name }}</code></p>
-        <p class="muted">
-          映射到 {{ action.target.kind }}：<code>{{ action.target.name }}</code>
-        </p>
-      </article>
-    </div>
+    <article class="panel full action-placeholder">
+      <div>
+        <p class="eyebrow">coming next</p>
+        <h3>Action 先占位，不抢本轮主路径</h3>
+      </div>
+      <p class="muted">
+        这一轮先保证系统能力中心与任务追踪闭环稳定。Action 继续作为长期重要资产保留独立页面，避免后续再拆导航。
+      </p>
+      <div class="action-grid compact">
+        <article v-for="action in actions.slice(0, 6)" :key="action.name" class="action-card muted-card">
+          <div>
+            <p class="eyebrow">{{ action.domain }}</p>
+            <h3>{{ action.title }}</h3>
+          </div>
+          <p class="muted">{{ action.summary }}</p>
+          <p><code>/{{ action.name }}</code></p>
+        </article>
+      </div>
+    </article>
   </section>
 </template>
+
+<style scoped>
+.action-placeholder {
+  display: grid;
+  gap: 18px;
+}
+
+.compact {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.muted-card {
+  opacity: 0.82;
+}
+
+@media (max-width: 960px) {
+  .compact {
+    grid-template-columns: 1fr;
+  }
+}
+</style>

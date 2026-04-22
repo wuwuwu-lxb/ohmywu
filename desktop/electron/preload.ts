@@ -8,4 +8,20 @@ contextBridge.exposeInMainWorld('ohmywu', {
     return () => ipcRenderer.removeListener(channel, subscription)
   },
   platform: process.platform,
+
+  window: {
+    minimize: () => ipcRenderer.invoke('window:minimize'),
+    maximize: () => ipcRenderer.invoke('window:maximize'),
+    close: () => ipcRenderer.invoke('window:close'),
+    isMaximized: () => ipcRenderer.invoke('window:isMaximized') as Promise<boolean>,
+  },
+
+  notification: {
+    show: (title: string, body: string) => ipcRenderer.invoke('notification:show', title, body),
+  },
+
+  app: {
+    getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
+    quit: () => ipcRenderer.invoke('app:quit'),
+  },
 })

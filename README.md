@@ -1,140 +1,141 @@
 # OhMyWu
 
-一个本地优先、可控执行、可审计、可扩展的**个人 Agent 平台**。
+OhMyWu 是一个**本地优先、可控执行、可审计**的电脑管家，同时也是一个会持续沉淀能力资产的个人 Agent 平台。
 
-> 电脑管理能力不是产品本体，而是首发最适合落地的一组能力域。
+当前 v0.1 先以 **Linux 电脑管家** 的形态落地：先把系统管理做扎实，让用户不用依赖 AI 也能直接完成稳定任务；同时保留统一能力资产和未来 Agent 编排的底座。
 
-v0.1 首发能力域：`system-management`，在 Ubuntu/Debian + systemd + apt 环境下，验证 Agent 平台底座是否成立。
+## 当前产品定位
 
-## 当前里程碑
+- **对外**：真正可用的 Linux 电脑管家
+- **对内**：个人 Agent 平台的首发能力域验证
+- **首发能力域**：`system-management`
+- **支持环境**：Ubuntu 22.04 / 24.04、Debian 12、systemd、apt
 
-```
-✅ M1 — 项目骨架（Rust workspace + Vue3 frontend + Electron 壳）
-✅ M2 — 只读能力落地（进程/服务/存储/日志真实 Linux 数据）
-✅ Tool Enhancement B — ECharts 图表化（CPU/Mem/状态分布图表）
-✅ M3 — 可控操作落地（kill 进程、服务启停、清理任务、审计记录）
-✅ M3 Write Ops — cleanup tree API + split-pane treemap UI + sudo 降级
-🔲 M4 — 桌面集成（Electron 主窗口 + 托盘 + 通知）
-🔲 M5 — Agent 预埋（Action/Tool/Workflow Registry 稳定化）
-```
+## v0.1 目标
 
-## 功能预览
+v0.1 不追求完整 Agent 自治，也不把桌宠或多 Agent 作为主路径。
 
-**用户模式**（类 360 工具箱，直接操作，无需 AI）：
+当前只验证这条闭环：
 
-| 页面 | 功能 | 数据来源 |
-|------|------|----------|
-| 概览 | 系统总览 + CPU/Mem TOP10 图表（5s 轮询） | /proc |
-| 进程管理 | 进程列表 + 搜索 + CPU/Mem/状态图表 | /proc |
-| 服务管理 | systemd 服务列表 + 状态分布饼图 | systemctl |
-| 存储扫描 | 目录占用分析 + TOP10 图表 | du |
-| 日志查看 | journal 日志 + 优先级/单位分布图表 | journalctl |
-| 任务记录 | 扫描与执行历史（stub） | Task Engine |
-| 审计记录 | 行为日志（stub） | Audit Engine |
-
-**Agent 模式**（暂未开放，入口已预留）
-
-## 技术架构
-
-```
-Electron Shell / 未来桌宠壳
-            │
-       Web UI（Vue3 + ECharts）
-            │  Vite Proxy /api → :3000
-        Rust Daemon（Axum）
-            │
-  Core Runtime + Agent Orchestrator
-            │
-   toolkit-system-management（首发能力域）
-            │
-    linux-adapter（/proc + systemctl + journalctl + du）
-            │
-     command-runner（tokio async 受控命令执行）
+```text
+系统问题观察
+  → 用户或 AI 触发稳定能力
+  → 受控执行
+  → Task + Audit 可追踪
+  → 能力继续沉淀为可复用 Action
 ```
 
-**Rust Crates（14 个）**
+也就是说：
+- AI 可以参与发现、规划和沉淀能力
+- 稳定能力最终必须能脱离 AI 独立存在
+- 用户模式和未来 Agent 模式共享同一套能力资产
 
-| Crate | 职责 |
-|-------|------|
-| `domain` | 核心数据结构：ProcessInfo, ServiceInfo, JournalEntry... |
-| `action-registry` | Action 注册与发现，用户/AI 共用同一套调用表面 |
-| `tool-registry` | Tool 元数据与调用入口 |
-| `workflow-registry` | 可复用流程编排注册 |
-| `policy-engine` | Sandbox/Danger 模式 + 风险分级 |
-| `task-engine` | 任务队列、状态机、取消、超时 |
-| `audit` | 审计事件记录 |
-| `agent-kernel` | 主/子 Agent 治理模型 |
-| `toolkit-system-management` | 首发能力域：进程/服务/存储/日志 Action+Tool |
-| `linux-adapter` | /proc 读取 + systemctl + journalctl + du 封装 |
-| `command-runner` | tokio async 命令执行器（超时、stdout/stderr） |
+## 当前用户模式结构
 
-**前端（apps/web）**
-- Vue 3 + Vue Router + Pinia
-- ECharts 5 + vue-echarts（存储页面 treemap 可视化）
-- Vite 开发服务器，proxy `/api/*` → `http://127.0.0.1:3000`
+用户模式当前收敛为四个主入口：
 
-## 本地启动
+1. **总览**
+   - 展示当前系统状态、Daemon 状态和关键入口
+2. **系统能力中心**
+   - 承接进程、服务、存储、日志四个系统工作台
+   - 页面顶部使用固定二级导航：进程 / 服务 / 存储 / 日志
+3. **Action**
+   - 稳定能力资产中心
+   - 当前先保留占位，后续承接动态增长的可直接触发能力
+4. **任务总览**
+   - 合并 Task 与 Audit
+   - 强调命令、风险等级、执行结果、审计可追踪
 
-```bash
-# Rust daemon
-cargo run -p ohmywu-daemon
-# 监听 http://127.0.0.1:3000
+## 核心原则
 
-# Web 前端
-pnpm --dir apps/web dev
-# 访问 http://127.0.0.1:5173
-```
+### 1. Computer Manager First
+首发先做电脑管家，不是因为目标只有电脑管家，而是因为 system-management 最适合沉淀第一批稳定能力。
 
-## API 端点
+### 2. AI Optional, Capability Persistent
+AI 可以参与能力发现、规划、复现和编排；但一旦能力稳定，就应当能脱离 AI 独立存在，并被用户直接触发。
 
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/api/processes` | GET | 真实进程列表（602 条） |
-| `/api/services` | GET | 真实 systemd 服务（214 条） |
-| `/api/storage/scans` | POST | 目录占用扫描 |
-| `/api/logs/journal` | POST | journal 日志读取 |
-| `/api/system/overview` | GET | 系统总览 |
-| `/api/health` | GET | 健康检查 |
+### 3. Shared Capability Surface
+用户模式、命令入口和未来 Agent 模式应共享同一套能力资产，而不是维护两套系统。
 
-完整 API 规范见 `plan.md`（Section 10）。
+### 4. Policy First
+任何执行能力都必须经过风险判断。系统分为沙箱模式与危险模式，能力按 ReadOnly / ControlledWrite / HighRisk 分级。
+
+### 5. Audit First
+所有关键读取和写操作都必须可追踪。Task 与 Audit 不是配套页，而是用户信任闭环的一部分。
 
 ## 关键概念
 
-**Action** — 底层原子能力，用户模式和 Agent 模式共用同一套调用入口。对话中可直接引用：`/scan_storage`、`/restart_service`。
+### 原子能力（Atomic Capability）
+底层执行单元，例如 read、terminal command、curl、script runner。原子能力不直接在用户模式暴露，只作为 Action / Workflow / Agent 的执行基座。
 
-**Tool** — 最小可执行单元，具备输入、输出、权限级别和审计记录。
+### Action
+对用户和 AI 统一暴露的稳定能力入口。Action 可以封装 Tool、Workflow 或脚本执行链路。用户看到的是“能完成什么事”，不是底层执行细节。
 
-**Workflow** — 可重复执行的流程编排，不依赖 AI 独立运行。
+### Workflow
+经过验证、可重复执行的流程编排，是从一次次执行轨迹中沉淀出来的中间资产。
 
-**Agent** — 具有角色、记忆、目标和工具调用能力的实体。v0.1 只做结构预埋。
+### Agent
+具有角色、记忆、规划和编排能力的实体。未来 Agent 模式会调用同一套能力资产，但 v0.1 不以 Agent 自治为首发主路径。
 
-**运行模式** — 默认沙箱模式，只读优先；写操作需确认，审计不可关闭。
+## 当前已落地能力
 
-## 目录结构
+### 系统能力中心
+- 系统总览
+- 进程查看与结束进程
+- systemd 服务查看与启动/停止/重启
+- 存储扫描与清理预览/执行
+- journal 日志读取与基础诊断
 
+### 统一追踪
+- Task 记录所有扫描与执行动作
+- Audit 记录执行主体、目标、风险等级和结果摘要
+
+## 为什么不是普通电脑管家
+
+OhMyWu 和传统系统工具的区别不在于“会不会显示 CPU 和内存”，而在于：
+
+- 它把稳定能力沉淀成可复用资产
+- 它允许这些能力被用户直接触发，也能被未来 Agent 编排复用
+- 它强调能力治理、风险控制和执行追踪
+- 它为后续的个人 Agent 平台打下统一底座
+
+## 当前开发重点
+
+- 收敛用户模式信息架构，减少导航噪音
+- 把系统管理能力统一收口到系统能力中心
+- 保持 Action 的独立地位，突出其长期资产意义
+- 完成任务总览的统一追踪闭环
+- 保证 Rust daemon、Web 前端和 Electron 壳持续可构建
+
+## 技术架构
+
+```text
+Electron Shell / Future Floating Shell / Future Pet Shell
+                    │
+         Web UI (Overview / System / Action / Tasks)
+                    │
+      Local API + Task/Audit + Reference Surface
+                    │
+                Rust Daemon
+                    │
+      Action / Workflow / Policy / Task / Audit
+                    │
+         Atomic Capabilities + Linux Adapters
 ```
-ohmywu/
-├── apps/
-│   ├── daemon/       Rust Axum API server
-│   ├── web/           Vue3 + Vite + ECharts 前端
-│   └── electron/      Electron 桌面壳
-└── crates/            14 个 Rust crate
-```
 
-## 设计原则
+### 当前技术栈
+- **Daemon**：Rust + Axum
+- **Web UI**：Vue 3 + Vue Router + Pinia + ECharts
+- **Desktop Shell**：Electron
+- **首发环境**：Ubuntu / Debian + systemd + apt
 
-- **Daemon First** — Rust 后台是系统大脑，Electron 不承载核心逻辑
-- **Shared Action Surface** — 用户和 AI 通过同一套 Action 访问能力
-- **Policy First** — 任何执行能力都必须经过 Policy 判断
-- **Audit First** — 所有写操作和关键读取都必须可追溯
-- **Human Directed** — 支持用户手动拆任务，不依赖 AI 也能完成稳定任务
+## 后续方向
 
-完整设计文档：`plan.md`
+当前不在 v0.1 主路径的内容：
+- 高自主 Agent 主流程
+- 子 Agent 自创建 / 自升级闭环
+- Live2D 桌宠完整交互
+- 长记忆 / RAG / 自进化闭环
+- 跨发行版支持
 
-详细架构文档：`book/architecture.md`
-
-## 平台边界
-
-**v0.1 支持**：Ubuntu 22.04/24.04、Debian 12、systemd、apt
-
-**v0.1 不做**：高自主 Agent 执行、Live2D 桌宠、跨发行版兼容、常驻 root daemon
+这些方向都保留，但会建立在当前电脑管家与统一能力资产底座之上。

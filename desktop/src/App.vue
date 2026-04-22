@@ -1,66 +1,71 @@
 <template>
   <div class="app-shell">
-    <!-- Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-inner">
-        <!-- Brand -->
-        <div class="brand">
-          <div class="brand-mark">
-            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-              <circle cx="14" cy="14" r="13" stroke="#C9A96E" stroke-width="1.5"/>
-              <path d="M9 14 C9 10.5, 12 8, 14 8 C16 8, 19 10.5, 19 14" stroke="#C9A96E" stroke-width="1.5" stroke-linecap="round" fill="none"/>
-              <circle cx="14" cy="17" r="2" fill="#C9A96E" opacity="0.6"/>
-            </svg>
-          </div>
-          <div class="brand-text">
-            <span class="brand-name">OhMyWu</span>
-            <span class="brand-status">
-              <span class="status-dot"></span>
-              运行中
-            </span>
-          </div>
-        </div>
-
-        <!-- Navigation -->
-        <nav class="nav">
-          <span class="nav-label">导航</span>
-          <router-link
-            v-for="(item, i) in navItems"
-            :key="item.path"
-            :to="item.path"
-            class="nav-item"
-            :style="{ animationDelay: `${i * 0.06}s` }"
-          >
-            <span class="nav-icon" v-html="item.icon"></span>
-            <span class="nav-text">{{ item.label }}</span>
-            <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
-          </router-link>
-        </nav>
-
-        <!-- Bottom section -->
-        <div class="sidebar-bottom">
-          <div class="system-indicator">
-            <div class="indicator-bar">
-              <div class="indicator-fill" style="width: 32%"></div>
+    <TitleBar />
+    <div class="app-content">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-inner">
+          <!-- Brand -->
+          <div class="brand">
+            <div class="brand-mark">
+              <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                <circle cx="14" cy="14" r="13" stroke="#C9A96E" stroke-width="1.5"/>
+                <path d="M9 14 C9 10.5, 12 8, 14 8 C16 8, 19 10.5, 19 14" stroke="#C9A96E" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                <circle cx="14" cy="17" r="2" fill="#C9A96E" opacity="0.6"/>
+              </svg>
             </div>
-            <span class="indicator-label">负载 0.32</span>
+            <div class="brand-text">
+              <span class="brand-name">OhMyWu</span>
+              <span class="brand-status">
+                <span class="status-dot"></span>
+                运行中
+              </span>
+            </div>
+          </div>
+
+          <!-- Navigation -->
+          <nav class="nav">
+            <span class="nav-label">导航</span>
+            <router-link
+              v-for="(item, i) in navItems"
+              :key="item.path"
+              :to="item.path"
+              class="nav-item"
+              :style="{ animationDelay: `${i * 0.06}s` }"
+            >
+              <span class="nav-icon" v-html="item.icon"></span>
+              <span class="nav-text">{{ item.label }}</span>
+              <span v-if="item.badge" class="nav-badge">{{ item.badge }}</span>
+            </router-link>
+          </nav>
+
+          <!-- Bottom section -->
+          <div class="sidebar-bottom">
+            <div class="system-indicator">
+              <div class="indicator-bar">
+                <div class="indicator-fill" style="width: 32%"></div>
+              </div>
+              <span class="indicator-label">负载 0.32</span>
+            </div>
           </div>
         </div>
-      </div>
-    </aside>
+      </aside>
 
-    <!-- Main -->
-    <main class="main">
-      <router-view v-slot="{ Component }">
-        <transition name="page" mode="out-in">
-          <component :is="Component" />
-        </transition>
-      </router-view>
-    </main>
+      <!-- Main -->
+      <main class="main">
+        <router-view v-slot="{ Component }">
+          <transition name="page" mode="out-in">
+            <component :is="Component" />
+          </transition>
+        </router-view>
+      </main>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import TitleBar from './components/TitleBar.vue'
+
 const navItems = [
   {
     path: '/overview',
@@ -88,8 +93,15 @@ const navItems = [
 <style scoped>
 .app-shell {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   background: var(--bg-primary);
+}
+
+.app-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
 }
 
 /* ── Sidebar ── */

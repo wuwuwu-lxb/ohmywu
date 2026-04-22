@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 
 use ohmywu_command_runner::CommandRunner;
 use ohmywu_domain::{
-    CleanupExecuteQuery, CleanupItem, CleanupPreviewQuery, CleanupPreviewResult, CleanupPreset,
+    CleanupExecuteQuery, CleanupPreviewQuery, CleanupPreviewResult,
     CleanupNode, CleanupTreeResult,
     JournalEntry, JournalQuery, ProcessInfo, ServiceInfo, StorageEntry, StorageScanQuery,
     StorageScanResult,
@@ -390,7 +390,7 @@ impl LinuxAdapter {
                                             let sub_name = sub_path_str.split('/').last().unwrap_or(&sub_path_str).to_string();
                                             let (sub_cat, sub_level, sub_reason) = classify(&sub_path_str, sub_size, true);
                                             sub_children.push(CleanupNode {
-                                                path: sub_path_str.clone(),
+                                                path: sub_path_str.to_string(),
                                                 name: sub_name,
                                                 size_bytes: sub_size,
                                                 human_size: human_size(sub_size),
@@ -409,7 +409,7 @@ impl LinuxAdapter {
                         };
 
                         children.push(CleanupNode {
-                            path: path_str.clone(),
+                            path: path_str.to_string(),
                             name,
                             size_bytes: size,
                             human_size: human_size(size),
@@ -681,26 +681,52 @@ fn classify(path: &str, size: u64, _is_dir: bool) -> (&'static str, &'static str
     }
     if is_l1(path) {
         if path.contains("/.cache/") {
-            return ("cache", "L1", "");
+            return ("cache", "L1", "可再生缓存");
         }
-        if path.contains("/.cargo/") || path.contains("/.npm/") {
-            return ("package_cache", "L1", "");
+        if path.contains("/.cargo/") || path.contains("/.npm/") || path.contains("/pnpm/") {
+            return ("package_cache", "L1", "可重新下载的包缓存");
         }
-        return ("other", "L1", "");
+        return ("other", "L1", "可安全清理");
     }
     if is_l2(path) {
         if path.contains("/.cache/") {
             return ("cache", "L2", "应用缓存（需确认）");
         }
-        return ("toolchain", "L2", "工具链版本（需确认）");
+        return ("toolchain", "L2", "工具链或运行时文件（需确认）");
     }
     if size > 500 * 1024 * 1024 {
-        return ("unknown", "L2", "体积超 500MB");
+        return ("other", "unknown", "大体积目录，默认不纳入快捷清理");
     }
     if size > 50 * 1024 * 1024 {
-        return ("unknown", "unknown", "未分类大目录");
+        return ("other", "unknown", "未分类目录，建议手动确认");
     }
-    ("other", "L1", "")
+    ("other", "unknown", "未分类项目，默认不纳入快捷清理")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify;
+
+    #[test]
+    fn classify_keeps_large_workspace_out_of_caution_group() {
+        let (_, level, reason) = classify("/home/wuwuwu/workspace/projects", 13 * 1024 * 1024 * 1024, true);
+        assert_eq!(level, "unknown");
+        assert_eq!(reason, "大体积目录，默认不纳入快捷清理");
+    }
+
+    #[test]
+    fn classify_marks_known_recyclable_cache_as_safe() {
+        let (_, level, reason) = classify("/home/wuwuwu/.cache/pip", 800 * 1024 * 1024, true);
+        assert_eq!(level, "L1");
+        assert_eq!(reason, "可再生缓存");
+    }
+
+    #[test]
+    fn classify_marks_toolchain_versions_as_caution() {
+        let (_, level, reason) = classify("/home/wuwuwu/.rustup/toolchains", 4 * 1024 * 1024 * 1024, true);
+        assert_eq!(level, "L2");
+        assert_eq!(reason, "工具链或运行时文件（需确认）");
+    }
 }
 
 
@@ -732,70 +758,4 @@ fn uid_to_name(uid: u32) -> String {
         }
         _ => uid.to_string(),
     }
-}
-
-fn make_item(
-    path: String,
-    size_bytes: u64,
-    category: &str,
-    reason: &str,
-    risk: &str,
-    risk_reason: &str,
-    executable: bool,
-    execution_block_reason: &str,
-) -> CleanupItem {
-    CleanupItem {
-        human_size: human_size(size_bytes),
-        path,
-        size_bytes,
-        category: category.to_string(),
-        reason: reason.to_string(),
-        risk: risk.to_string(),
-        risk_reason: risk_reason.to_string(),
-        executable,
-        execution_block_reason: execution_block_reason.to_string(),
-    }
-}
-
-fn classify_path(path: &str, size: u64, is_dir: bool) -> (&'static str, &'static str, &'static str, bool, &'static str) {
-    // executable=false: only truly dangerous things (toolchain, large_dir)
-    // risk=risky: needs user confirmation but CAN be executed
-    // risk=safe: no confirmation needed
-
-    if path.contains("/.cache/") || path.ends_with("/.cache") {
-        return ("cache", "safe", "", true, "");
-    }
-    if path.contains("/.npm") || path.contains("/npm/_cacache") {
-        return ("package_cache", "safe", "", true, "");
-    }
-    if path.contains("/.cargo/registry") {
-        return ("package_cache", "safe", "", true, "");
-    }
-    if path.contains("/.nvm/versions") || path.contains("/.pyenv/versions") || path.contains("/.rustup/toolchains") {
-        return (
-            "toolchain",
-            "risky",
-            "删除工具链版本可能影响开发环境，请确认不再使用",
-            false,
-            "工具链目录暂不支持应用内直接清理，请先切换版本或手动卸载",
-        );
-    }
-    if is_dir && size > 100 * 1024 * 1024 {
-        return (
-            "large_dir",
-            "risky",
-            "大型目录（超过 100MB），请先确认内容再清理",
-            false,
-            "大型目录暂不支持应用内直接递归删除，请手动确认后处理",
-        );
-    }
-    if path.starts_with("/tmp") {
-        return ("temp", "safe", "", true, "");
-    }
-    if path.starts_with("/var/log") {
-        return ("log", "risky", "系统日志，操作前请确认", true, "");
-    }
-    // All other paths: executable=true, but risky if it's a dir
-    ("
-other", "safe", "", !is_dir, if is_dir { "目录操作有风险，请先确认内容" } else { "" })
 }

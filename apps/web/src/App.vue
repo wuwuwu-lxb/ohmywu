@@ -1,93 +1,91 @@
 <script setup lang="ts">
-import { ref, provide, onMounted, onUnmounted } from 'vue'
-import { RouterLink, RouterView } from 'vue-router'
+import { computed, provide, ref, KeepAlive } from 'vue'
+import { RouterLink, RouterView, useRoute } from 'vue-router'
 import Toast from '@/components/Toast.vue'
 
-const mode = ref<'user' | 'agent'>('user')
 const toasts = ref<Array<{ id: number; message: string; type: 'success' | 'error' | 'info' }>>([])
 let toastId = 0
-
-function toggleMode() {
-  if (mode.value === 'user') {
-    mode.value = 'agent'
-  } else {
-    mode.value = 'user'
-  }
-}
 
 function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
   const id = ++toastId
   toasts.value.push({ id, message, type })
   setTimeout(() => {
-    toasts.value = toasts.value.filter((t) => t.id !== id)
+    toasts.value = toasts.value.filter((toast) => toast.id !== id)
   }, 3500)
 }
 
 provide('toast', showToast)
 
-const dispatchChartResize = () => {
-  window.dispatchEvent(new CustomEvent('chart-resize'))
-}
+const route = useRoute()
 
-onMounted(() => {
-  window.addEventListener('resize', dispatchChartResize)
-})
+const navItems = [
+  { to: '/', label: '总览' },
+  { to: '/system/processes', label: '系统能力中心' },
+  { to: '/actions', label: 'Action' },
+  { to: '/tasks', label: '任务总览' },
+]
 
-onUnmounted(() => {
-  window.removeEventListener('resize', dispatchChartResize)
+const pageMeta = computed(() => {
+  if (route.path.startsWith('/system')) {
+    return {
+      eyebrow: 'system-management',
+      title: '系统能力中心',
+      description: '统一查看进程、服务、存储和日志能力，进入后通过顶部二级导航切换当前系统工作台。',
+    }
+  }
+
+  if (route.path === '/actions') {
+    return {
+      eyebrow: 'stable actions',
+      title: 'Action',
+      description: '稳定能力资产入口。当前保留独立页面，后续逐步承接沉淀后的可直接触发能力。',
+    }
+  }
+
+  if (route.path === '/tasks') {
+    return {
+      eyebrow: 'trace center',
+      title: '任务总览',
+      description: '统一查看 Task 与 Audit，追踪执行结果、风险等级与命令闭环。',
+    }
+  }
+
+  return {
+    eyebrow: 'computer manager',
+    title: '总览',
+    description: '电脑管家的主入口。先判断系统状态，再进入系统能力中心、Action 和任务追踪。',
+  }
 })
 </script>
 
 <template>
-  <div class="shell">
+  <div class="shell shell-layout">
     <aside class="sidebar">
       <div class="brand">
         <p class="eyebrow">OhMyWu</p>
-        <h1>智能电脑管家</h1>
+        <h1>真正的电脑管家</h1>
+        <p class="muted shell-copy">本地优先、可控执行、可审计，同时为未来 Agent 模式保留统一能力底座。</p>
       </div>
 
-      <!-- 模式切换 -->
-      <div class="mode-switcher">
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'user' }"
-          @click="mode = 'user'"
-        >
-          用户模式
-        </button>
-        <button
-          class="mode-btn"
-          :class="{ active: mode === 'agent', disabled: true }"
-          @click="mode = 'agent'"
-          disabled
-          title="Agent 模式暂未开放"
-        >
-          Agent 模式
-        </button>
-      </div>
-
-      <nav class="nav" v-if="mode === 'user'">
-        <RouterLink to="/">概览</RouterLink>
-        <RouterLink to="/tools/processes">进程管理</RouterLink>
-        <RouterLink to="/tools/services">服务管理</RouterLink>
-        <RouterLink to="/tools/storage">存储扫描</RouterLink>
-        <RouterLink to="/tools/logs">日志查看</RouterLink>
-        <RouterLink to="/tasks">任务记录</RouterLink>
-        <RouterLink to="/audits">审计记录</RouterLink>
-      </nav>
-
-      <nav class="nav" v-else>
-        <RouterLink to="/conversation">对话</RouterLink>
-        <RouterLink to="/actions">Actions</RouterLink>
+      <nav class="nav sidebar-nav">
+        <RouterLink v-for="item in navItems" :key="item.to" :to="item.to">{{ item.label }}</RouterLink>
       </nav>
 
       <div class="status-card">
         <span class="pill">v0.1 · system-management</span>
-        <p>默认沙箱模式，写操作需确认。</p>
+        <span class="pill pill-dark">sandbox by default</span>
       </div>
     </aside>
 
     <main class="content">
+      <section class="topbar">
+        <div class="page-title">
+          <p class="eyebrow">{{ pageMeta.eyebrow }}</p>
+          <h2>{{ pageMeta.title }}</h2>
+          <p class="muted">{{ pageMeta.description }}</p>
+        </div>
+      </section>
+
       <RouterView v-slot="{ Component }">
         <KeepAlive>
           <component :is="Component" />
@@ -95,7 +93,6 @@ onUnmounted(() => {
       </RouterView>
     </main>
 
-    <!-- Toast container -->
     <div class="toast-container">
       <Toast
         v-for="toast in toasts"
@@ -106,46 +103,3 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
-
-<style scoped>
-.mode-switcher {
-  display: flex;
-  gap: 4px;
-  padding: 8px 12px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 8px;
-  margin: 0 12px 12px;
-}
-.mode-btn {
-  flex: 1;
-  padding: 6px 8px;
-  border: none;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-  background: transparent;
-  color: #888;
-  transition: all 0.2s;
-}
-.mode-btn.active {
-  background: var(--accent, #c9a96e);
-  color: #fff;
-}
-.mode-btn.disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-</style>
-
-<style>
-.toast-container {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  z-index: 99999;
-}
-</style>
