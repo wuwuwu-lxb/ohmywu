@@ -268,9 +268,9 @@ pub struct CleanupItem {
     pub path: String,
     pub size_bytes: u64,
     pub human_size: String,
-    pub category: String,  // cache/temp/log/package_cache/toolchain/large_dir/other
+    pub category: String, // cache/temp/log/package_cache/toolchain/large_dir/other
     pub reason: String,
-    pub risk: String,       // "safe" | "risky"
+    pub risk: String, // "safe" | "risky"
     pub risk_reason: String,
     pub executable: bool,
     pub execution_block_reason: String,
@@ -287,6 +287,25 @@ pub struct CleanupPreviewResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CleanupExecuteQuery {
     pub paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupDeletedPath {
+    pub path: String,
+    pub freed_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupRejectedPath {
+    pub path: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CleanupExecuteResult {
+    pub freed_bytes: u64,
+    pub deleted: Vec<CleanupDeletedPath>,
+    pub rejected: Vec<CleanupRejectedPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

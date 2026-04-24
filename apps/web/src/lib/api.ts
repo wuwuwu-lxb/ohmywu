@@ -192,8 +192,24 @@ export async function fetchCleanupPreview(preset: 'common' | 'custom', path?: st
   })
 }
 
-export async function executeCleanup(paths: string[]): Promise<{ freed_bytes: number }> {
-  return request<{ freed_bytes: number }>('/api/cleanup/execute', {
+export type CleanupDeletedPath = {
+  path: string
+  freed_bytes: number
+}
+
+export type CleanupRejectedPath = {
+  path: string
+  reason: string
+}
+
+export type CleanupExecuteResult = {
+  freed_bytes: number
+  deleted: CleanupDeletedPath[]
+  rejected: CleanupRejectedPath[]
+}
+
+export async function executeCleanup(paths: string[]): Promise<CleanupExecuteResult> {
+  return request<CleanupExecuteResult>('/api/cleanup/execute', {
     method: 'POST',
     body: JSON.stringify({ paths }),
   })

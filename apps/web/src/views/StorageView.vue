@@ -136,7 +136,11 @@ async function doCleanup() {
 
   try {
     const res = await executeCleanup(paths)
-    toast?.(`已释放 ${formatSize(res.freed_bytes)}`, 'success')
+    if (res.rejected.length > 0) {
+      toast?.(`已释放 ${formatSize(res.freed_bytes)}，${res.rejected.length} 个项目被后端拒绝`, 'info')
+    } else {
+      toast?.(`已释放 ${formatSize(res.freed_bytes)}`, 'success')
+    }
     await loadTree()
   } catch (e) {
     toast?.(`清理失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error')

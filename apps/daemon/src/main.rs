@@ -2,7 +2,7 @@ use std::{net::SocketAddr, sync::Arc};
 
 use axum::{
     extract::State,
-    http::{Method, StatusCode},
+    http::Method,
     routing::{get, post},
     Json, Router,
 };
@@ -20,8 +20,7 @@ use ohmywu_reference_resolver::resolve_references;
 use ohmywu_store::InMemoryStore;
 use ohmywu_task_engine::TaskEngine;
 use ohmywu_toolkit_system_management::{
-    system_management_action_specs, system_management_agent_templates,
-    system_management_workflows,
+    system_management_action_specs, system_management_agent_templates, system_management_workflows,
 };
 use ohmywu_workflow_registry::WorkflowRegistry;
 use serde::Deserialize;
@@ -42,7 +41,9 @@ struct AppState {
 async fn main() {
     let actions = Arc::new(ActionRegistry::from_specs(system_management_action_specs()));
     let workflows = Arc::new(WorkflowRegistry::from_specs(system_management_workflows()));
-    let agents = Arc::new(AgentKernel::from_templates(system_management_agent_templates()));
+    let agents = Arc::new(AgentKernel::from_templates(
+        system_management_agent_templates(),
+    ));
     let store = Arc::new(InMemoryStore::new(AppSettings::default()));
     let linux_adapter = Arc::new(LinuxAdapter::default());
     let task_engine = Arc::new(TaskEngine::default());
@@ -154,7 +155,11 @@ async fn system_overview() -> Json<serde_json::Value> {
 
     let uptime_secs = std::fs::read_to_string("/proc/uptime")
         .ok()
-        .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
+        .and_then(|s| {
+            s.split_whitespace()
+                .next()
+                .and_then(|v| v.parse::<f64>().ok())
+        })
         .unwrap_or(0.0);
     let uptime_days = uptime_secs / 86400.0;
     let uptime_hours = (uptime_secs % 86400.0) / 3600.0;
@@ -328,7 +333,9 @@ async fn start_service(
                 "success",
                 None,
             );
-            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+            Ok(Json(
+                serde_json::json!({ "success": true, "service": name }),
+            ))
         }
         Err(e) => {
             state.task_engine.fail(&task_id, &e);
@@ -362,7 +369,9 @@ async fn stop_service(
                 "success",
                 None,
             );
-            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+            Ok(Json(
+                serde_json::json!({ "success": true, "service": name }),
+            ))
         }
         Err(e) => {
             state.task_engine.fail(&task_id, &e);
@@ -396,7 +405,9 @@ async fn restart_service(
                 "success",
                 None,
             );
-            Ok(Json(serde_json::json!({ "success": true, "service": name })))
+            Ok(Json(
+                serde_json::json!({ "success": true, "service": name }),
+            ))
         }
         Err(e) => {
             state.task_engine.fail(&task_id, &e);
@@ -419,7 +430,9 @@ async fn cleanup_preview(
     State(state): State<AppState>,
     Json(query): Json<CleanupPreviewQuery>,
 ) -> Json<CleanupPreviewResult> {
-    let task_id = state.task_engine.new_task("cleanup_preview", query.path.as_deref().unwrap_or("common"));
+    let task_id = state
+        .task_engine
+        .new_task("cleanup_preview", query.path.as_deref().unwrap_or("common"));
     let result = state.linux_adapter.cleanup_preview(query).await;
     state.task_engine.complete(&task_id, "success");
     state.audit_log.record(
@@ -469,34 +482,36 @@ async fn cleanup_scan_path(
 async fn cleanup_execute(
     State(state): State<AppState>,
     Json(query): Json<CleanupExecuteQuery>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+) -> Json<ohmywu_domain::CleanupExecuteResult> {
     let target = format!("{} paths", query.paths.len());
     let task_id = state.task_engine.new_task("cleanup_execute", &target);
     let result = state.linux_adapter.cleanup_execute(query).await;
-    match result {
-        Ok(freed_bytes) => {
-            state.task_engine.complete(&task_id, "success");
-            state.audit_log.record(
-                "user",
-                "cleanup_execute",
-                &target,
-                RiskLevel::HighRisk,
-                "success",
-                Some(&format!("freed {} bytes", freed_bytes)),
-            );
-            Ok(Json(serde_json::json!({ "freed_bytes": freed_bytes })))
-        }
-        Err(e) => {
-            state.task_engine.fail(&task_id, &e);
-            state.audit_log.record(
-                "user",
-                "cleanup_execute",
-                &target,
-                RiskLevel::HighRisk,
-                "failure",
-                Some(&e),
-            );
-            Err((StatusCode::BAD_REQUEST, e))
-        }
+    let detail = format!(
+        "freed {} bytes, deleted {}, rejected {}",
+        result.freed_bytes,
+        result.deleted.len(),
+        result.rejected.len()
+    );
+    let status = if result.deleted.is_empty() && !result.rejected.is_empty() {
+        "failure"
+    } else if result.rejected.is_empty() {
+        "success"
+    } else {
+        "partial_success"
+    };
+
+    if status == "failure" {
+        state.task_engine.fail(&task_id, &detail);
+    } else {
+        state.task_engine.complete(&task_id, &detail);
     }
+    state.audit_log.record(
+        "user",
+        "cleanup_execute",
+        &target,
+        RiskLevel::HighRisk,
+        status,
+        Some(&detail),
+    );
+    Json(result)
 }

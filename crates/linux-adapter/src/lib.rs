@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 
 use ohmywu_command_runner::CommandRunner;
 use ohmywu_domain::{
-    CleanupExecuteQuery, CleanupPreviewQuery, CleanupPreviewResult,
-    CleanupNode, CleanupTreeResult,
+    CleanupDeletedPath, CleanupExecuteQuery, CleanupExecuteResult, CleanupNode,
+    CleanupPreviewQuery, CleanupPreviewResult, CleanupRejectedPath, CleanupTreeResult,
     JournalEntry, JournalQuery, ProcessInfo, ServiceInfo, StorageEntry, StorageScanQuery,
     StorageScanResult,
 };
@@ -75,11 +75,19 @@ impl LinuxAdapter {
                 let mut memory_kb = 0u64;
                 for line in content.lines() {
                     if line.starts_with("Uid:") {
-                        let uid: u32 = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        let uid: u32 = line
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                         user = uid_to_name(uid);
                     }
                     if line.starts_with("VmRSS:") {
-                        memory_kb = line.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                        memory_kb = line
+                            .split_whitespace()
+                            .nth(1)
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0);
                     }
                 }
                 (user, memory_kb)
@@ -90,7 +98,11 @@ impl LinuxAdapter {
                 if bytes.is_empty() {
                     String::new()
                 } else {
-                    bytes.split(|&b| b == 0).map(|s| String::from_utf8_lossy(s).to_string()).collect::<Vec<_>>().join(" ")
+                    bytes
+                        .split(|&b| b == 0)
+                        .map(|s| String::from_utf8_lossy(s).to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 }
             };
 
@@ -107,7 +119,11 @@ impl LinuxAdapter {
             });
         }
 
-        processes.sort_by(|a, b| b.cpu_percent.partial_cmp(&a.cpu_percent).unwrap_or(std::cmp::Ordering::Equal));
+        processes.sort_by(|a, b| {
+            b.cpu_percent
+                .partial_cmp(&a.cpu_percent)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         processes
     }
 
@@ -170,7 +186,13 @@ impl LinuxAdapter {
         let depth = query.depth.unwrap_or(1);
 
         let runner = CommandRunner::default();
-        let output = runner.run("du", &["-b", "--max-depth", &depth.to_string(), root_path], Some(60)).await;
+        let output = runner
+            .run(
+                "du",
+                &["-b", "--max-depth", &depth.to_string(), root_path],
+                Some(60),
+            )
+            .await;
 
         let mut entries: Vec<StorageEntry> = output
             .stdout
@@ -218,7 +240,13 @@ impl LinuxAdapter {
         args.push(lines.to_string());
 
         let runner = CommandRunner::default();
-        let output = runner.run("journalctl", &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(), Some(15)).await;
+        let output = runner
+            .run(
+                "journalctl",
+                &args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                Some(15),
+            )
+            .await;
 
         output
             .stdout
@@ -237,10 +265,7 @@ impl LinuxAdapter {
                     .and_then(|v| v.as_str())
                     .unwrap_or("?")
                     .to_string();
-                let priority = json
-                    .get("PRIORITY")
-                    .and_then(|v| v.as_i64())
-                    .unwrap_or(6) as i32;
+                let priority = json.get("PRIORITY").and_then(|v| v.as_i64()).unwrap_or(6) as i32;
                 let message = json
                     .get("MESSAGE")
                     .and_then(|v| v.as_str())
@@ -358,7 +383,9 @@ impl LinuxAdapter {
     /// Scan children of a specific path (for on-demand deep drilling)
     pub async fn cleanup_scan_path(&self, path: &str) -> CleanupTreeResult {
         let runner = CommandRunner::default();
-        let output = runner.run("du", &["-b", "--max-depth=1", path], Some(30)).await;
+        let output = runner
+            .run("du", &["-b", "--max-depth=1", path], Some(30))
+            .await;
 
         let mut children = Vec::new();
         let mut total_bytes = 0u64;
@@ -372,23 +399,37 @@ impl LinuxAdapter {
                         let (cat, level, reason) = classify(&path_str, size, true);
 
                         // Check if this child has its own children by doing a depth-1 check
-                        let child_output = runner.run("du", &["-b", "--max-depth=0", &path_str], Some(10)).await;
+                        let child_output = runner
+                            .run("du", &["-b", "--max-depth=0", &path_str], Some(10))
+                            .await;
                         let has_children = child_output.stdout.lines().count() > 1
-                            || child_output.stdout.lines().next()
+                            || child_output
+                                .stdout
+                                .lines()
+                                .next()
                                 .and_then(|l| l.split_once('\t'))
                                 .and_then(|(s, _)| s.parse::<u64>().ok())
                                 .map(|s| s > size)
                                 .unwrap_or(false);
 
                         let grandchildren = if has_children {
-                            let sub_output = runner.run("du", &["-b", "--max-depth=1", &path_str], Some(30)).await;
+                            let sub_output = runner
+                                .run("du", &["-b", "--max-depth=1", &path_str], Some(30))
+                                .await;
                             let mut sub_children = Vec::new();
                             for sub_line in sub_output.stdout.lines() {
-                                if let Some((sub_size_str, sub_path_str)) = sub_line.split_once('\t') {
+                                if let Some((sub_size_str, sub_path_str)) =
+                                    sub_line.split_once('\t')
+                                {
                                     if let Ok(sub_size) = sub_size_str.parse::<u64>() {
                                         if sub_path_str != path_str && sub_size > 0 {
-                                            let sub_name = sub_path_str.split('/').last().unwrap_or(&sub_path_str).to_string();
-                                            let (sub_cat, sub_level, sub_reason) = classify(&sub_path_str, sub_size, true);
+                                            let sub_name = sub_path_str
+                                                .split('/')
+                                                .last()
+                                                .unwrap_or(&sub_path_str)
+                                                .to_string();
+                                            let (sub_cat, sub_level, sub_reason) =
+                                                classify(&sub_path_str, sub_size, true);
                                             sub_children.push(CleanupNode {
                                                 path: sub_path_str.to_string(),
                                                 name: sub_name,
@@ -443,8 +484,19 @@ impl LinuxAdapter {
         }
     }
 
-    async fn scan_home_tree(&self, runner: &CommandRunner, home: &str, max_depth: usize) -> Option<CleanupNode> {
-        let output = runner.run("du", &["-b", &format!("--max-depth={}", max_depth), home], Some(60)).await;
+    async fn scan_home_tree(
+        &self,
+        runner: &CommandRunner,
+        home: &str,
+        max_depth: usize,
+    ) -> Option<CleanupNode> {
+        let output = runner
+            .run(
+                "du",
+                &["-b", &format!("--max-depth={}", max_depth), home],
+                Some(60),
+            )
+            .await;
         let mut paths: Vec<(u64, String)> = Vec::new();
 
         for line in output.stdout.lines() {
@@ -465,20 +517,23 @@ impl LinuxAdapter {
         let total = paths.iter().map(|p| p.0).sum::<u64>();
         let home_name = home.split('/').last().unwrap_or("home");
 
-        let children = paths.into_iter().map(|(size, path)| {
-            let name = path.split('/').last().unwrap_or(&path).to_string();
-            let (cat, level, reason) = classify(&path, size, true);
-            CleanupNode {
-                path: path.clone(),
-                name,
-                size_bytes: size,
-                human_size: human_size(size),
-                category: cat.to_string(),
-                level: level.to_string(),
-                reason: reason.to_string(),
-                children: Vec::new(),
-            }
-        }).collect();
+        let children = paths
+            .into_iter()
+            .map(|(size, path)| {
+                let name = path.split('/').last().unwrap_or(&path).to_string();
+                let (cat, level, reason) = classify(&path, size, true);
+                CleanupNode {
+                    path: path.clone(),
+                    name,
+                    size_bytes: size,
+                    human_size: human_size(size),
+                    category: cat.to_string(),
+                    level: level.to_string(),
+                    reason: reason.to_string(),
+                    children: Vec::new(),
+                }
+            })
+            .collect();
 
         Some(CleanupNode {
             path: home.to_string(),
@@ -493,7 +548,9 @@ impl LinuxAdapter {
     }
 
     async fn scan_tmp_tree(&self, runner: &CommandRunner) -> Option<CleanupNode> {
-        let output = runner.run("find", &["/tmp", "-type", "f", "-atime", "+7"], Some(20)).await;
+        let output = runner
+            .run("find", &["/tmp", "-type", "f", "-atime", "+7"], Some(20))
+            .await;
         let mut total = 0u64;
         let mut children = Vec::new();
 
@@ -533,13 +590,21 @@ impl LinuxAdapter {
     }
 
     async fn scan_var_log_tree(&self, runner: &CommandRunner) -> Option<CleanupNode> {
-        let output = runner.run("find", &["/var/log", "-name", "*.gz", "-type", "f"], Some(10)).await;
+        let output = runner
+            .run(
+                "find",
+                &["/var/log", "-name", "*.gz", "-type", "f"],
+                Some(10),
+            )
+            .await;
         let mut total = 0u64;
         let mut children = Vec::new();
 
         for line in output.stdout.lines() {
             let path = line.trim();
-            if path.is_empty() { continue; }
+            if path.is_empty() {
+                continue;
+            }
             if let Ok(meta) = std::fs::metadata(path) {
                 let size = meta.len();
                 total += size;
@@ -573,7 +638,9 @@ impl LinuxAdapter {
     }
 
     async fn scan_apt_cache_tree(&self, runner: &CommandRunner) -> Option<CleanupNode> {
-        let output = runner.run("du", &["-b", "-s", "/var/cache/apt"], Some(5)).await;
+        let output = runner
+            .run("du", &["-b", "-s", "/var/cache/apt"], Some(5))
+            .await;
         if let Some(line) = output.stdout.lines().next() {
             if let Some((size_str, _)) = line.split_once('\t') {
                 if let Ok(size) = size_str.parse::<u64>() {
@@ -606,18 +673,26 @@ impl LinuxAdapter {
         }
     }
 
-
-    /// Delete the user-confirmed paths (L1/L2 only, L3 filtered by frontend).
-    pub async fn cleanup_execute(&self, query: CleanupExecuteQuery) -> Result<u64, String> {
+    /// Delete only backend-verified cleanup candidates.
+    pub async fn cleanup_execute(&self, query: CleanupExecuteQuery) -> CleanupExecuteResult {
         let mut freed_bytes: u64 = 0;
+        let mut deleted = Vec::new();
+        let mut rejected = Vec::new();
 
         for path_str in &query.paths {
             let path = std::path::Path::new(path_str);
-            if !path.exists() {
-                continue;
+            match cleanup_delete_allowed(path_str, path) {
+                Ok(()) => {}
+                Err(reason) => {
+                    rejected.push(CleanupRejectedPath {
+                        path: path_str.clone(),
+                        reason,
+                    });
+                    continue;
+                }
             }
-            let size_before = Self::dir_size(path).unwrap_or(0);
 
+            let size_before = Self::dir_size(path).unwrap_or(0);
             let result = if path.is_file() {
                 tokio::fs::remove_file(path).await
             } else {
@@ -625,14 +700,26 @@ impl LinuxAdapter {
             };
 
             match result {
-                Ok(()) => freed_bytes += size_before,
-                Err(e) => return Err(format!("failed to remove {}: {}", path_str, e)),
+                Ok(()) => {
+                    freed_bytes += size_before;
+                    deleted.push(CleanupDeletedPath {
+                        path: path_str.clone(),
+                        freed_bytes: size_before,
+                    });
+                }
+                Err(e) => rejected.push(CleanupRejectedPath {
+                    path: path_str.clone(),
+                    reason: format!("删除失败: {e}"),
+                }),
             }
         }
 
-        Ok(freed_bytes)
+        CleanupExecuteResult {
+            freed_bytes,
+            deleted,
+            rejected,
+        }
     }
-
 
     fn dir_size(path: &std::path::Path) -> Option<u64> {
         if path.is_file() {
@@ -651,28 +738,75 @@ impl LinuxAdapter {
 
 // L1 white list (absolutely safe)
 fn is_l1(path: &str) -> bool {
-    path.contains("/.cache/pip/") || path.ends_with("/.cache/pip")
-        || path.contains("/.cache/uv/") || path.ends_with("/.cache/uv")
-        || path.contains("/.cache/go-build/") || path.ends_with("/.cache/go-build")
-        || path.contains("/.cache/thumbnails/") || path.ends_with("/.cache/thumbnails")
-        || path.contains("/.cargo/registry/cache/") || path.contains("/.cargo/registry/src/")
-        || path.contains("/.npm/_cacache/") || path.ends_with("/.npm/_cacache")
+    path.contains("/.cache/pip/")
+        || path.ends_with("/.cache/pip")
+        || path.contains("/.cache/uv/")
+        || path.ends_with("/.cache/uv")
+        || path.contains("/.cache/go-build/")
+        || path.ends_with("/.cache/go-build")
+        || path.contains("/.cache/thumbnails/")
+        || path.ends_with("/.cache/thumbnails")
+        || path.contains("/.cargo/registry/cache/")
+        || path.contains("/.cargo/registry/src/")
+        || path.contains("/.npm/_cacache/")
+        || path.ends_with("/.npm/_cacache")
         || path.contains("/.local/share/pnpm/store/")
         || path.contains("/.local/share/Trash/files/")
 }
 
 // L2 caution (needs confirmation)
 fn is_l2(path: &str) -> bool {
-    path.contains("/.cache/chromium/") || path.contains("/.cache/firefox/")
-        || path.contains("/.nvm/versions/") || path.contains("/.pyenv/versions/")
+    path.contains("/.cache/chromium/")
+        || path.ends_with("/.cache/chromium")
+        || path.contains("/.cache/firefox/")
+        || path.ends_with("/.cache/firefox")
+        || path.contains("/.nvm/versions/")
+        || path.ends_with("/.nvm/versions")
+        || path.contains("/.pyenv/versions/")
+        || path.ends_with("/.pyenv/versions")
         || path.contains("/.rustup/toolchains/")
+        || path.ends_with("/.rustup/toolchains")
 }
 
 // L3 system files (need root)
 fn is_l3(path: &str) -> bool {
-    path.starts_with("/var/log/") || path.starts_with("/var/cache/apt/")
-        || path.starts_with("/etc/") || path.starts_with("/usr/bin/")
+    path.starts_with("/var/log/")
+        || path.starts_with("/var/cache/apt/")
+        || path.starts_with("/etc/")
+        || path.starts_with("/usr/bin/")
         || path.starts_with("/usr/lib/")
+}
+
+fn cleanup_delete_allowed(path_str: &str, path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err("路径不存在，已跳过".to_string());
+    }
+    if path_str == "/" {
+        return Err("禁止清理系统根目录".to_string());
+    }
+    if path_str == std::env::var("HOME").unwrap_or_default() {
+        return Err("禁止清理用户主目录".to_string());
+    }
+    if path_str.starts_with("/etc/")
+        || path_str.starts_with("/usr/")
+        || path_str.starts_with("/var/log/")
+        || path_str.starts_with("/var/cache/apt")
+    {
+        return Err("系统目录只允许展示，不允许从快捷清理删除".to_string());
+    }
+    if !path.is_file() && !path.is_dir() {
+        return Err("只允许清理普通文件或目录".to_string());
+    }
+
+    let size = LinuxAdapter::dir_size(path).unwrap_or(0);
+    let (_, level, _) = classify(path_str, size, path.is_dir());
+    if !matches!(level, "L1" | "L2") {
+        return Err(format!("当前分类为 {level}，不允许快捷清理"));
+    }
+    if level == "L2" && path_str.starts_with("/tmp/") {
+        return Err("临时目录中未过期或未确认项目不允许快捷清理".to_string());
+    }
+    Ok(())
 }
 
 fn classify(path: &str, size: u64, _is_dir: bool) -> (&'static str, &'static str, &'static str) {
@@ -709,7 +843,11 @@ mod tests {
 
     #[test]
     fn classify_keeps_large_workspace_out_of_caution_group() {
-        let (_, level, reason) = classify("/home/wuwuwu/workspace/projects", 13 * 1024 * 1024 * 1024, true);
+        let (_, level, reason) = classify(
+            "/home/wuwuwu/workspace/projects",
+            13 * 1024 * 1024 * 1024,
+            true,
+        );
         assert_eq!(level, "unknown");
         assert_eq!(reason, "大体积目录，默认不纳入快捷清理");
     }
@@ -723,12 +861,15 @@ mod tests {
 
     #[test]
     fn classify_marks_toolchain_versions_as_caution() {
-        let (_, level, reason) = classify("/home/wuwuwu/.rustup/toolchains", 4 * 1024 * 1024 * 1024, true);
+        let (_, level, reason) = classify(
+            "/home/wuwuwu/.rustup/toolchains",
+            4 * 1024 * 1024 * 1024,
+            true,
+        );
         assert_eq!(level, "L2");
         assert_eq!(reason, "工具链或运行时文件（需确认）");
     }
 }
-
 
 fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -754,7 +895,11 @@ fn uid_to_name(uid: u32) -> String {
     match output {
         Some(o) if o.status.success() => {
             let name = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if name.is_empty() { uid.to_string() } else { name }
+            if name.is_empty() {
+                uid.to_string()
+            } else {
+                name
+            }
         }
         _ => uid.to_string(),
     }
