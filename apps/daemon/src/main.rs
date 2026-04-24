@@ -287,7 +287,7 @@ async fn kill_process(
     axum::extract::Path(pid): axum::extract::Path<u64>,
 ) -> Result<Json<serde_json::Value>, String> {
     let task_id = state.task_engine.new_task("kill_process", &pid.to_string());
-    let result = state.linux_adapter.kill_process(pid);
+    let result = state.linux_adapter.kill_process(pid).await;
     match result {
         Ok(()) => {
             state.task_engine.complete(&task_id, "success");

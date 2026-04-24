@@ -285,17 +285,18 @@ impl LinuxAdapter {
     // ── M3: Write Operations ───────────────────────────────────────────────────
 
     /// Kill a process by PID using the kill command
-    pub fn kill_process(&self, pid: u64) -> Result<(), String> {
-        let output = std::process::Command::new("kill")
-            .arg(pid.to_string())
-            .output()
-            .map_err(|e| format!("failed to execute kill: {}", e))?;
+    pub async fn kill_process(&self, pid: u64) -> Result<(), String> {
+        let runner = CommandRunner::default();
+        let output = runner
+            .run("kill", &[&pid.to_string()], Some(30))
+            .await;
 
-        if output.status.success() {
+        if output.exit_code == 0 {
             Ok(())
+        } else if output.timed_out {
+            Err("kill command timed out".to_string())
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("kill failed: {}", stderr))
+            Err(format!("kill failed (exit {}): {}", output.exit_code, output.stderr))
         }
     }
 
@@ -887,20 +888,21 @@ fn human_size(bytes: u64) -> String {
 }
 
 fn uid_to_name(uid: u32) -> String {
-    let output = std::process::Command::new("id")
-        .arg("-u")
-        .arg(&uid.to_string())
-        .output()
-        .ok();
-    match output {
-        Some(o) if o.status.success() => {
-            let name = String::from_utf8_lossy(&o.stdout).trim().to_string();
+    // Use block_in_place so sync list_processes can call async command-runner
+    let uid_val = uid;
+    let rt = tokio::runtime::Handle::current();
+    rt.block_on(async {
+        let runner = CommandRunner::default();
+        let output = runner.run("id", &["-u", &uid_val.to_string()], Some(5)).await;
+        if output.exit_code == 0 {
+            let name = output.stdout.trim().to_string();
             if name.is_empty() {
-                uid.to_string()
+                uid_val.to_string()
             } else {
                 name
             }
+        } else {
+            uid_val.to_string()
         }
-        _ => uid.to_string(),
-    }
+    })
 }
