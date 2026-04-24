@@ -233,20 +233,21 @@ apps/web/src/
 
 ## 8. 未来路线
 
-### 8.1 短期
-- 完成桌面集成（Electron 主窗口、托盘、通知）
-- 继续完善 Action 页面，承接稳定能力资产
-- 继续细化存储清理分类，让更多目录从 unknown 精准沉淀为 L1 / L2
+### 8.1 短期（M2 — 原子能力夯实）
+- command-runner 补齐超时精确控制、stderr 分离、exit_code 语义标准化
+- linux-adapter 所有命令调用统一经由 command-runner
+- 为后续 Action / Workflow / Agent 层提供确定性执行基座
 
-### 8.2 中期
-- 允许 AI 发起 Action / Workflow 调用
-- 保持人工确认与 Policy 控制
-- 让执行轨迹持续沉淀为 Workflow 与 Action
+### 8.2 中期（M3 — Action 执行闭环）
+- POST /api/actions/execute 统一执行入口
+- ActionSpec 动态注册与发现能力
+- Action 页面从展示清单升级为可触发操作面板
+- Action 与系统专项路由并存，共同暴露给 AI/Agent 调用层
 
-### 8.3 长期
+### 8.3 长期（M4 — Agent 模式预埋）
 - 引入 Agent 模式与子 Agent 体系
+- 在不破坏用户模式的前提下，引入对话与未来编排能力
 - 接入 Live2D 桌宠作为轻量交互壳
-- 扩展 files / browser / content / coding / personal-ops 等能力域
 
 ## 9. 设计原则
 
@@ -259,4 +260,4 @@ apps/web/src/
 
 ---
 
-*最后更新：2026-04-22*
+*最后更新：2026-04-24*

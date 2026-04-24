@@ -281,11 +281,19 @@ Future Agent Mode
 - 后端 classify 收紧，避免大目录仅因体积进入 `L2`
 - 为 `unknown` 增加“默认不纳入快捷清理”分组
 
-### M2 — 稳定能力沉淀
-- 把更多已验证流程沉淀为可复用 Action
-- Action 页面逐步承接稳定能力池
+### M2 — 原子能力夯实
+- command-runner 补齐超时精确控制、stderr 分离、exit_code 语义标准化
+- linux-adapter 所有命令调用统一经由 command-runner，避免各 handler 自行调用 CommandRunner
+- 确立原子能力的执行接口：timeout / stdout / stderr / exit_code 统一抽象
+- 为后续 Action / Workflow / Agent 层提供确定性执行基座
 
-### M3 — Agent 模式预埋
+### M3 — Action 执行闭环
+- POST /api/actions/execute 统一执行入口
+- ActionSpec 动态注册与查询能力
+- Action 页面从展示清单升级为可触发操作的面板
+- Action 与系统专项路由（/api/processes/:pid/kill 等）并存，共同暴露给 AI/Agent 调用层
+
+### M4 — Agent 模式预埋
 - 在不破坏用户模式的前提下，引入对话、原子能力展示和未来编排能力
 
 ## 10. 当前判断标准
@@ -293,7 +301,7 @@ Future Agent Mode
 如果以下条件成立，说明 v0.1 路线正确：
 
 - 用户不依赖 AI 也能完成核心系统管理任务
-- Action 与系统能力没有割裂成两套体系
+- Action 与系统能力在 UI/路由层各自独立，在 AI/Agent 调用层统一，不相互阻断
 - 任务和审计能够完整追踪执行链路
 - 原子能力没有污染用户模式心智
 - 存储快捷清理不会把未分类的大目录误导进安全路径
