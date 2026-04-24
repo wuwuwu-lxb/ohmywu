@@ -4,6 +4,7 @@ import { join } from 'path'
 const isDev = process.env.NODE_ENV !== 'production' || !app.isPackaged
 
 let mainWindow: BrowserWindow | null = null
+let petWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 
 function createWindow() {
@@ -24,7 +25,6 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://127.0.0.1:5173')
-    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, '../dist/index.html'))
   }
@@ -50,6 +50,55 @@ function createWindow() {
   })
 }
 
+function createPetWindow() {
+  if (petWindow) return
+
+  petWindow = new BrowserWindow({
+    width: 320,
+    height: 420,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    title: 'OhMyWu Pet',
+    backgroundColor: '#00000000',
+    show: false,
+    webPreferences: {
+      preload: join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: false,
+    },
+  })
+
+  // Load apps/web with pet=1 query param → auto-enters lightweight mode
+  const url = isDev
+    ? 'http://127.0.0.1:5173/?pet=1'
+    : `file://${join(__dirname, '../dist/index.html')}?pet=1`
+
+  petWindow.loadURL(url)
+
+  petWindow.once('ready-to-show', () => {
+    petWindow?.show()
+  })
+
+  petWindow.on('closed', () => {
+    petWindow = null
+  })
+
+  // Hide devtools if any
+  petWindow.webContents.on('did-finish-load', () => {
+    petWindow?.webContents.closeDevTools()
+  })
+}
+
+function closePetWindow() {
+  if (petWindow) {
+    petWindow.close()
+    petWindow = null
+  }
+}
+
 function createTray() {
   const icon = createDefaultIcon()
   tray = new Tray(icon)
@@ -68,6 +117,21 @@ function createTray() {
         mainWindow?.hide()
       },
     },
+    {
+      label: '轻量模式',
+      click: () => {
+        mainWindow?.webContents.send('enter-lightweight')
+      },
+    },
+    {
+      label: '返回桌面模式',
+      click: () => {
+        closePetWindow()
+        mainWindow?.show()
+        mainWindow?.focus()
+        mainWindow?.webContents.send('exit-lightweight')
+      },
+    },
     { type: 'separator' },
     {
       label: '关于 OhMyWu',
@@ -80,6 +144,7 @@ function createTray() {
     {
       label: '退出',
       click: () => {
+        closePetWindow()
         tray?.destroy()
         tray = null
         app.quit()
@@ -184,9 +249,22 @@ function setupIpcHandlers() {
   })
 
   ipcMain.handle('app:quit', () => {
+    closePetWindow()
     tray?.destroy()
     tray = null
     app.quit()
+  })
+
+  // Pet window control
+  ipcMain.on('pet:enter', () => {
+    mainWindow?.hide()
+    createPetWindow()
+  })
+
+  ipcMain.on('pet:exit', () => {
+    closePetWindow()
+    mainWindow?.show()
+    mainWindow?.focus()
   })
 }
 
@@ -215,6 +293,7 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    closePetWindow()
     tray?.destroy()
     tray = null
     app.quit()
@@ -223,6 +302,7 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  closePetWindow()
   tray?.destroy()
   tray = null
 })

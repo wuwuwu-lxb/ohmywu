@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('ohmywu', {
     ipcRenderer.on(channel, subscription)
     return () => ipcRenderer.removeListener(channel, subscription)
   },
+  send: (channel: string, ...args: unknown[]) => ipcRenderer.send(channel, ...args),
   platform: process.platform,
 
   window: {
@@ -23,5 +24,11 @@ contextBridge.exposeInMainWorld('ohmywu', {
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion') as Promise<string>,
     quit: () => ipcRenderer.invoke('app:quit'),
+  },
+
+  // Pet window control
+  pet: {
+    enter: () => ipcRenderer.send('pet:enter'),
+    exit: () => ipcRenderer.send('pet:exit'),
   },
 })
