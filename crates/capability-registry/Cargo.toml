@@ -1,0 +1,8 @@
+[package]
+name = "ohmywu-capability-registry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+ohmywu-domain = { path = "../domain" }
+serde = { version = "1", features = ["derive"] }

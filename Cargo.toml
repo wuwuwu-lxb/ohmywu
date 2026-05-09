@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "src-tauri",
+    "crates/domain",
+    "crates/capability-registry",
+    "crates/action-registry",
+    "crates/policy-engine",
+    "crates/task-engine",
+    "crates/audit",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"

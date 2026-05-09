@@ -4,7 +4,7 @@
 
 ## 定位
 
-比 openclaw / hermes 更好用的个人 Agent。**不擅长编码**，定位是生活和工作中的个人管家。
+比 openclaw / hermes 更好用的个人 Agent。定位是生活和工作中的个人管家。（编码能力定位不同于 Codex、Claude Code 等专用编码 Agent，但有基础编码支持）
 
 ## 核心理念
 
