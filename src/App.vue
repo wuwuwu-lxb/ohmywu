@@ -1,87 +1,69 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { ref, onMounted, markRaw } from "vue"
+import Sidebar from "./components/Sidebar.vue"
+import RightPanel from "./components/RightPanel.vue"
+import { useSidebarNav } from "./composables/useNav"
+import { useTheme } from "./composables/useTheme"
+import ChatView from "./views/ChatView.vue"
+import ActionsView from "./views/ActionsView.vue"
+import AuditView from "./views/AuditView.vue"
+import SettingsView from "./views/SettingsView.vue"
+import type { Component } from "vue"
 
-const showPet = ref(false)
+const { register } = useSidebarNav()
+const { preset } = useTheme()
 
-const togglePet = () => {
-  showPet.value = !showPet.value
+const activeView = ref<string>("chat")
+const rightPanelOpen = ref(false)
+
+const viewMap: Record<string, Component> = {
+  chat: markRaw(ChatView),
+  actions: markRaw(ActionsView),
+  audit: markRaw(AuditView),
+  __settings__: markRaw(SettingsView),
 }
+
+const onNavSelect = (id: string) => {
+  activeView.value = id
+}
+
+onMounted(() => {
+  register({ id: "chat", label: "对话", icon: "💬" })
+  register({ id: "actions", label: "Actions", icon: "⚡" })
+  register({ id: "audit", label: "审计日志", icon: "📋" })
+})
 </script>
 
 <template>
-  <div class="app-shell">
-    <header class="titlebar">
-      <span class="titlebar-brand">OhMyWu</span>
-      <nav class="titlebar-nav">
-        <router-link to="/">对话</router-link>
-      </nav>
-      <button class="pet-toggle" @click="togglePet">
-        {{ showPet ? "隐藏桌宠" : "显示桌宠" }}
-      </button>
-    </header>
-    <main class="main-content">
-      <router-view />
+  <div class="app-shell" :data-theme="preset">
+    <Sidebar @select="onNavSelect" />
+
+    <main class="main-area">
+      <component :is="viewMap[activeView] || viewMap['chat']" />
     </main>
+
+    <RightPanel
+      :open="rightPanelOpen"
+      title="执行链路"
+      @close="rightPanelOpen = false"
+    >
+      <p>选中一条消息后，这里会显示执行链路详情。</p>
+    </RightPanel>
   </div>
 </template>
 
 <style scoped>
 .app-shell {
   display: flex;
-  flex-direction: column;
   height: 100vh;
-  background: #0f0f0f;
-  color: #e0e0e0;
+  background: var(--bg-base);
 }
 
-.titlebar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  height: 40px;
-  background: #1a1a1a;
-  border-bottom: 1px solid #2a2a2a;
-  user-select: none;
-}
-
-.titlebar-brand {
-  font-weight: 700;
-  font-size: 14px;
-  color: #fff;
-}
-
-.titlebar-nav a {
-  color: #888;
-  text-decoration: none;
-  font-size: 13px;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.titlebar-nav a:hover,
-.titlebar-nav a.router-link-active {
-  color: #fff;
-  background: #2a2a2a;
-}
-
-.pet-toggle {
-  margin-left: auto;
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
-  color: #ccc;
-  font-size: 12px;
-  padding: 4px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-.pet-toggle:hover {
-  background: #3a3a3a;
-}
-
-.main-content {
+.main-area {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 </style>

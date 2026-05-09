@@ -31,11 +31,16 @@ M0（框架搭建）已全部完成，正在进入 M1（原子能力执行闭环
 - [x] `lib.rs` — AppState + Tauri commands + run()
 - [x] `main.rs` — 入口
 
-### 前端
-- [x] `App.vue` — Shell + 桌宠切换按钮
-- [x] `ChatView.vue` — 对话界面（echo placeholder）
-- [x] `main.ts` — Vue + Router 入口
-- [x] `style.css` — 全局样式
+## 前端 UI
+
+- [x] 全局主题系统（预设主题 + 自定义强调色）
+- [x] 可折叠侧栏（可扩展导航注册机制）
+- [x] iMessage 式对话气泡（用户右对齐 + Agent 左对齐 + emoji 头像）
+- [x] 可折叠执行卡片（Action 概览 + 展开详情）
+- [x] 右侧详情面板骨架
+- [x] Action 列表页
+- [x] 审计日志页
+- [x] 设置页（主题预设 + 色轮 + 重置）
 
 ### 构建验证
 - [x] `cargo check` ✅
