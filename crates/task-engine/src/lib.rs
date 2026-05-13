@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-use ohmywu_domain::{Task, TaskStatus};
+use ohmywu_domain::{self, Task, TaskStatus};
 
 /// Task engine — lifecycle management for tracked executions.
 pub struct TaskEngine {
@@ -22,7 +22,7 @@ impl TaskEngine {
         *counter += 1;
         let id = format!("task-{}", *counter);
 
-        let now = chrono_now();
+        let now = ohmywu_domain::chrono_now();
         let task = Task {
             id: id.clone(),
             name: name.to_string(),
@@ -70,22 +70,4 @@ impl Default for TaskEngine {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Simple local timestamp helper (no chrono dependency).
-fn chrono_now() -> String {
-    use std::time::SystemTime;
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = ts.as_secs();
-    let rem = secs % 86400;
-    let hours = rem / 3600;
-    let minutes = (rem % 3600) / 60;
-    let seconds = rem % 60;
-    // approximate date from epoch — good enough for dev
-    format!(
-        "2026-05-10T{:02}:{:02}:{:02}Z",
-        hours, minutes, seconds
-    )
 }

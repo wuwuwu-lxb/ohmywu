@@ -1,6 +1,6 @@
 use std::sync::RwLock;
 
-use ohmywu_domain::{AuditEvent, RiskLevel};
+use ohmywu_domain::{self, AuditEvent, RiskLevel};
 
 /// Audit log — immutable record of all significant operations.
 pub struct AuditLog {
@@ -14,6 +14,8 @@ impl AuditLog {
         }
     }
 
+    const MAX_EVENTS: usize = 10_000;
+
     pub fn record(
         &self,
         actor: &str,
@@ -24,7 +26,7 @@ impl AuditLog {
         detail: Option<&str>,
     ) {
         let mut events = self.events.write().unwrap();
-        let now = chrono_now();
+        let now = ohmywu_domain::chrono_now();
         events.push(AuditEvent {
             actor: actor.to_string(),
             action: action.to_string(),
@@ -34,6 +36,11 @@ impl AuditLog {
             detail: detail.map(|s| s.to_string()),
             timestamp: now,
         });
+        // cap at MAX_EVENTS, keep newest
+        if events.len() > Self::MAX_EVENTS {
+            let excess = events.len() - Self::MAX_EVENTS;
+            events.drain(..excess);
+        }
     }
 
     pub fn list(&self, limit: usize) -> Vec<AuditEvent> {
@@ -47,17 +54,4 @@ impl Default for AuditLog {
     fn default() -> Self {
         Self::new()
     }
-}
-
-fn chrono_now() -> String {
-    use std::time::SystemTime;
-    let ts = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = ts.as_secs();
-    let rem = secs % 86400;
-    let hours = rem / 3600;
-    let minutes = (rem % 3600) / 60;
-    let seconds = rem % 60;
-    format!("2026-05-10T{:02}:{:02}:{:02}Z", hours, minutes, seconds)
 }

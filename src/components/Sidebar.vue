@@ -2,6 +2,7 @@
 import { useSidebarNav } from "../composables/useNav"
 import { useSidebar } from "../composables/useTheme"
 
+defineProps<{ activeId?: string }>()
 const { items } = useSidebarNav()
 const { collapsed, toggle } = useSidebar()
 const emit = defineEmits<{ select: [id: string] }>()
@@ -10,10 +11,16 @@ const emit = defineEmits<{ select: [id: string] }>()
 <template>
   <aside :class="['sidebar', { collapsed }]">
     <div class="sidebar-header">
-      <span v-if="!collapsed" class="sidebar-brand">OhMyWu</span>
-      <button class="sidebar-toggle" @click="toggle" :title="collapsed ? '展开侧栏' : '折叠侧栏'">
-        <span v-if="collapsed">☰</span>
-        <span v-else>✕</span>
+      <div v-if="!collapsed" class="brand">
+        <span class="brand-mark">✦</span>
+        <span class="brand-text">OhMyWu</span>
+      </div>
+      <button class="toggle-btn" @click="toggle" :title="collapsed ? '展开' : '折叠'">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <rect x="1" y="2" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+          <rect x="1" y="6" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+          <rect x="1" y="10" width="12" height="1.5" rx="0.75" fill="currentColor"/>
+        </svg>
       </button>
     </div>
 
@@ -21,7 +28,7 @@ const emit = defineEmits<{ select: [id: string] }>()
       <button
         v-for="item in items"
         :key="item.id"
-        class="nav-item"
+        :class="['nav-item', { active: item.id === activeId }]"
         @click="emit('select', item.id)"
       >
         <span class="nav-icon">{{ item.icon }}</span>
@@ -31,7 +38,11 @@ const emit = defineEmits<{ select: [id: string] }>()
     </nav>
 
     <div v-if="!collapsed" class="sidebar-footer">
-      <button class="nav-item" @click="emit('select', '__settings__')">
+      <div class="footer-divider" />
+      <button
+        :class="['nav-item', { active: activeId === '__settings__' }]"
+        @click="emit('select', '__settings__')"
+      >
         <span class="nav-icon">⚙</span>
         <span class="nav-label">设置</span>
       </button>
@@ -47,16 +58,15 @@ const emit = defineEmits<{ select: [id: string] }>()
   min-width: 0;
   background: var(--bg-surface);
   border-right: 1px solid var(--border-subtle);
-  transition: width 0.2s ease, opacity 0.2s ease;
+  transition: width var(--duration-normal) var(--ease-in-out);
   overflow: hidden;
 }
 
 .sidebar.collapsed {
-  width: var(--sidebar-collapsed-w);
-  opacity: 0;
-  pointer-events: none;
+  width: 40px;
 }
 
+/* header */
 .sidebar-header {
   display: flex;
   align-items: center;
@@ -64,37 +74,61 @@ const emit = defineEmits<{ select: [id: string] }>()
   height: var(--titlebar-h);
   padding: 0 12px;
   border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
 }
 
-.sidebar-brand {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.brand-text {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
   color: var(--text-primary);
-  letter-spacing: 0.5px;
+  letter-spacing: 0.3px;
 }
 
-.sidebar-toggle {
-  background: none;
+.toggle-btn {
+  width: 26px;
+  height: 26px;
   border: none;
-  color: var(--text-secondary);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 14px;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--duration-fast) var(--ease-out);
 }
 
-.sidebar-toggle:hover {
-  color: var(--text-primary);
+.toggle-btn:hover {
   background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
+/* nav */
 .sidebar-nav {
   flex: 1;
   overflow-y: auto;
-  padding: 8px;
+  padding: 6px;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
 .nav-item {
@@ -102,15 +136,17 @@ const emit = defineEmits<{ select: [id: string] }>()
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 7px 10px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--text-sm);
+  font-family: var(--font);
+  font-weight: 500;
   cursor: pointer;
   text-align: left;
-  font-family: inherit;
+  transition: all var(--duration-fast) var(--ease-out);
 }
 
 .nav-item:hover {
@@ -118,8 +154,13 @@ const emit = defineEmits<{ select: [id: string] }>()
   color: var(--text-primary);
 }
 
+.nav-item.active {
+  background: var(--bg-active);
+  color: var(--text-primary);
+}
+
 .nav-icon {
-  font-size: 16px;
+  font-size: 15px;
   width: 20px;
   text-align: center;
   flex-shrink: 0;
@@ -138,10 +179,17 @@ const emit = defineEmits<{ select: [id: string] }>()
   border-radius: 10px;
   min-width: 18px;
   text-align: center;
+  line-height: 1.4;
 }
 
+/* footer */
 .sidebar-footer {
-  padding: 8px;
-  border-top: 1px solid var(--border-subtle);
+  padding: 6px;
+}
+
+.footer-divider {
+  height: 1px;
+  background: var(--border-subtle);
+  margin-bottom: 6px;
 }
 </style>

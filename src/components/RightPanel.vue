@@ -49,25 +49,31 @@ const emit = defineEmits<{ close: [] }>()
   align-items: center;
   justify-content: space-between;
   height: var(--titlebar-h);
-  padding: 0 12px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 .panel-title {
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text-primary);
+  letter-spacing: 0.3px;
 }
 
 .panel-close {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   background: none;
   border: none;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   cursor: pointer;
-  font-size: 13px;
-  padding: 4px 6px;
-  border-radius: var(--radius-sm);
+  font-size: 14px;
+  border-radius: var(--radius-xs);
+  transition: all var(--duration-fast) var(--ease-out);
 }
 
 .panel-close:hover {
@@ -78,9 +84,9 @@ const emit = defineEmits<{ close: [] }>()
 .panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
-  font-size: 13px;
-  line-height: 1.6;
+  padding: 14px;
+  font-size: var(--text-sm);
+  line-height: 1.7;
   color: var(--text-secondary);
 }
 </style>

@@ -19,137 +19,149 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 
 <template>
   <div :class="['msg-row', msg.role]">
-    <div class="msg-avatar" v-if="msg.role === 'agent'">
-      <span class="avatar-icon">{{ msg.agentIcon || "🤖" }}</span>
-    </div>
-
-    <div class="msg-content">
-      <div class="msg-meta">
-        <span class="msg-agent" v-if="msg.agentName">{{ msg.agentName }}</span>
-        <span class="msg-time">{{ new Date(msg.timestamp).toLocaleTimeString() }}</span>
+    <!-- Agent: icon + name on the left -->
+    <template v-if="msg.role === 'agent'">
+      <div class="msg-icon">
+        <span>{{ msg.agentIcon || "✦" }}</span>
       </div>
-
-      <div class="msg-bubble">
-        <p class="msg-text">{{ msg.content }}</p>
+      <div class="msg-body">
+        <div class="msg-header">
+          <span class="msg-sender">{{ msg.agentName || "OhMyWu" }}</span>
+          <span class="msg-time">{{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+        </div>
+        <div class="msg-text">{{ msg.content }}</div>
+        <div v-if="msg.execs?.length" class="msg-execs">
+          <ExecutionCard v-for="(exec, i) in msg.execs" :key="i" :exec="exec" />
+        </div>
+        <div v-if="msg.taskId" class="msg-task-link" @click="emit('show-task', msg.taskId!)">
+          <span>查看执行链路</span>
+          <span class="link-arrow">→</span>
+        </div>
       </div>
+    </template>
 
-      <div v-if="msg.execs?.length" class="msg-execs">
-        <ExecutionCard
-          v-for="(exec, i) in msg.execs"
-          :key="i"
-          :exec="exec"
-        />
+    <!-- User: right-aligned, no avatar -->
+    <template v-else>
+      <div class="msg-body user-body">
+        <div class="msg-header user-header">
+          <span class="msg-time">{{ new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
+        </div>
+        <div class="msg-text user-text">{{ msg.content }}</div>
       </div>
-
-      <div v-if="msg.taskId" class="msg-task-link" @click="emit('show-task', msg.taskId!)">
-        查看执行链路 ▸
-      </div>
-    </div>
-
-    <div class="msg-avatar user-avatar" v-if="msg.role === 'user'">
-      <span class="avatar-icon">🧑</span>
-    </div>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .msg-row {
   display: flex;
-  gap: 10px;
-  padding: 0 16px;
-  max-width: 720px;
+  gap: 12px;
+  padding: 8px 20px;
+  max-width: 760px;
   margin: 0 auto;
   width: 100%;
 }
 
 .msg-row.user {
-  flex-direction: row-reverse;
+  justify-content: flex-end;
 }
 
-.msg-avatar {
+/* Agent icon */
+.msg-icon {
   flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  margin-top: 2px;
-}
-
-.avatar-icon {
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  font-size: 16px;
-  border-radius: 50%;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 14px;
+  margin-top: 2px;
 }
 
-.user-avatar .avatar-icon {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-
-.msg-content {
+/* Message body */
+.msg-body {
   flex: 1;
   min-width: 0;
+  max-width: 85%;
 }
 
-.msg-meta {
+.user-body {
+  max-width: 70%;
+}
+
+/* Header row */
+.msg-header {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-  margin-bottom: 4px;
+  margin-bottom: 3px;
 }
 
-.msg-agent {
-  font-size: 12px;
+.user-header {
+  justify-content: flex-end;
+}
+
+.msg-sender {
+  font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text-secondary);
+  letter-spacing: 0.3px;
 }
 
 .msg-time {
-  font-size: 11px;
-  color: var(--text-tertiary);
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
 }
 
-.msg-bubble {
-  padding: 10px 14px;
-  border-radius: var(--radius-lg);
-  font-size: 14px;
-  line-height: 1.6;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-}
-
-.msg-row.user .msg-bubble {
-  background: color-mix(in srgb, var(--accent) 20%, var(--bg-surface));
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
-}
-
+/* Text content */
 .msg-text {
+  font-size: var(--text-base);
+  line-height: 1.65;
+  color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--text-primary);
 }
 
-.msg-row.user .msg-text {
-  color: var(--text-primary);
+.user-text {
+  padding: 8px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
 }
 
+/* Executions */
 .msg-execs {
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
+/* Task link */
 .msg-task-link {
-  margin-top: 6px;
-  font-size: 12px;
-  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
   cursor: pointer;
-  opacity: 0.7;
+  transition: all var(--duration-fast) var(--ease-out);
 }
 
 .msg-task-link:hover {
-  opacity: 1;
+  border-color: var(--border-default);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.link-arrow {
+  color: var(--accent);
 }
 </style>

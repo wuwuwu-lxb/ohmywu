@@ -8,6 +8,8 @@ members = [
     "crates/policy-engine",
     "crates/task-engine",
     "crates/audit",
+    "crates/session",
+    "crates/llm-adapter",
 ]
 
 [workspace.package]

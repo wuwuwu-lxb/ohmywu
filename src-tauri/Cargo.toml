@@ -15,9 +15,14 @@ tauri = { version = "2", features = [] }
 tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+dirs = "6"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
 ohmywu-domain = { path = "../crates/domain" }
 ohmywu-capability-registry = { path = "../crates/capability-registry" }
 ohmywu-action-registry = { path = "../crates/action-registry" }
 ohmywu-policy-engine = { path = "../crates/policy-engine" }
 ohmywu-task-engine = { path = "../crates/task-engine" }
 ohmywu-audit = { path = "../crates/audit" }
+ohmywu-session = { path = "../crates/session" }
+ohmywu-llm-adapter = { path = "../crates/llm-adapter" }

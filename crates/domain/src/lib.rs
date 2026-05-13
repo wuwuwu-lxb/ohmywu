@@ -69,6 +69,11 @@ pub enum TaskStatus {
     Failed,
 }
 
+/// Current UTC timestamp in ISO 8601 format.
+pub fn chrono_now() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 /// Audit event — records every significant operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
