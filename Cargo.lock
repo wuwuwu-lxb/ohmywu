@@ -2201,6 +2201,7 @@ version = "0.1.0"
 dependencies = [
  "dirs",
  "futures",
+ "glob",
  "ohmywu-action-registry",
  "ohmywu-audit",
  "ohmywu-capability-registry",
@@ -2209,12 +2210,14 @@ dependencies = [
  "ohmywu-policy-engine",
  "ohmywu-session",
  "ohmywu-task-engine",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-shell",
  "tokio",
+ "walkdir",
 ]
 
 [[package]]
@@ -2735,6 +2738,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

@@ -1,7 +1,6 @@
 mod agent;
 mod config;
 mod data_dir;
-mod executor;
 mod tools;
 
 use std::sync::Arc;
@@ -79,6 +78,36 @@ fn register_capabilities(registry: &CapabilityRegistry) {
         "Read file contents from the filesystem.",
         RiskLevel::ReadOnly,
     ));
+    registry.register(Capability::new(
+        "write",
+        "Write content to a file, creating parent directories if needed.",
+        RiskLevel::ControlledWrite,
+    ));
+    registry.register(Capability::new(
+        "edit",
+        "Edit a file by finding and replacing exact text. Requires unique match.",
+        RiskLevel::ControlledWrite,
+    ));
+    registry.register(Capability::new(
+        "glob",
+        "Search for files matching a glob pattern.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "grep",
+        "Search file contents for a pattern.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "web_fetch",
+        "Fetch and read content from a URL.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "thinking",
+        "Use for internal reasoning and planning steps. Does not execute anything.",
+        RiskLevel::ReadOnly,
+    ));
 }
 
 fn register_actions(registry: &ActionRegistry) {
@@ -123,10 +152,10 @@ fn get_audits(state: tauri::State<AppState>) -> Vec<AuditEvent> {
 
 #[tauri::command]
 async fn execute_capability(
-    request: executor::ExecuteRequest,
+    request: tools::ExecuteRequest,
     state: tauri::State<'_, AppState>,
-) -> Result<executor::ExecuteResult, String> {
-    Ok(executor::execute_capability(&state, request).await)
+) -> Result<tools::ExecuteResult, String> {
+    Ok(tools::dispatch_tool(&state, request).await)
 }
 
 // ── Tauri Commands: policy ───────────────────────────────────────
@@ -229,11 +258,11 @@ async fn send_message(
     } else {
         // Phase 1 fallback: simple command parsing
         if let Some(path) = parse_read_cmd(&content) {
-            let req = executor::ExecuteRequest {
+            let req = tools::ExecuteRequest {
                 capability: "read".into(),
                 params: serde_json::json!({ "path": path }),
             };
-            let result = executor::execute_capability(&state, req).await;
+            let result = tools::dispatch_tool(&state, req).await;
             let err_msg = result.error.clone().unwrap_or_default();
             let reply = match result.status.as_str() {
                 "success" => result.output.clone().unwrap_or_else(|| "(empty)".into()),
@@ -253,11 +282,11 @@ async fn send_message(
                 task_id: Some(result.task_id),
             }
         } else if let Some(cmd) = parse_run_cmd(&content) {
-            let req = executor::ExecuteRequest {
+            let req = tools::ExecuteRequest {
                 capability: "bash".into(),
                 params: serde_json::json!({ "command": cmd }),
             };
-            let result = executor::execute_capability(&state, req).await;
+            let result = tools::dispatch_tool(&state, req).await;
             let err_msg = result.error.clone().unwrap_or_default();
             let reply = match result.status.as_str() {
                 "success" => result.output.clone().unwrap_or_else(|| "(empty)".into()),

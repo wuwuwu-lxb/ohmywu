@@ -6,8 +6,7 @@ use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
 use tauri::Emitter;
 
-use crate::executor::{self, ExecuteRequest};
-use crate::tools::capabilities_as_tools;
+use crate::tools::{self, active_tool_defs, ExecuteRequest};
 use crate::AppState;
 
 const SYSTEM_PROMPT: &str = "\
@@ -47,7 +46,7 @@ pub async fn agent_loop(
     // Step 2: Probe capabilities — detect whether tools/streaming are supported
     let caps = provider.probe_capabilities().await;
     let tools = if caps.supports_streaming_with_tools {
-        capabilities_as_tools(state)
+        active_tool_defs(state)
     } else {
         // Model doesn't support tools (e.g. DeepSeek), fall back to pure text
         vec![]
@@ -106,19 +105,18 @@ pub async fn agent_loop(
         });
 
         for tc in tool_calls {
-            if tc.function.name.is_empty() {
+            let name = &tc.function.name;
+            if name.is_empty() {
                 continue;
             }
 
             let params: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or(serde_json::Value::Null);
 
-            let capability = if tc.function.name == "bash" {
-                "bash".to_string()
-            } else if tc.function.name == "read" {
-                "read".to_string()
+            // Tool name = capability name. Unknown tools fall back to bash.
+            let capability = if state.capabilities.contains(name) {
+                name.clone()
             } else {
-                // action — treat as bash with the action name
                 "bash".to_string()
             };
 
@@ -128,7 +126,7 @@ pub async fn agent_loop(
             };
 
             let start = Instant::now();
-            let result = executor::execute_capability(state, req).await;
+            let result = tools::dispatch_tool(state, req).await;
             let duration_ms = start.elapsed().as_millis() as u64;
 
             let exec_record = ExecutionRecord {
@@ -143,7 +141,6 @@ pub async fn agent_loop(
             last_task_id = Some(result.task_id.clone());
             executions.push(exec_record);
 
-            // Add tool result message
             let tool_result = match result.status.as_str() {
                 "success" => result.output.unwrap_or_else(|| "(empty)".into()),
                 "denied" => format!("权限不足：{}", result.error.unwrap_or_default()),
