@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 use ohmywu_domain::chrono_now;
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
@@ -92,7 +90,7 @@ pub async fn agent_loop(
             });
         }
 
-        // Process tool calls
+        // Process tool calls concurrently using join_all
         let tool_calls = response.tool_calls.as_ref().unwrap();
         let assistant_content = response.content.unwrap_or_default();
 
@@ -104,9 +102,13 @@ pub async fn agent_loop(
             tool_call_id: None,
         });
 
+        // Build dispatch futures for all tool calls
+        let mut futures = Vec::new();
+        let mut exec_meta: Vec<(String, String, String)> = Vec::new();
+        // (tc.id, capability, input)
+
         for tc in tool_calls {
-            let name = &tc.function.name;
-            if name.is_empty() {
+            if tc.function.name.is_empty() {
                 continue;
             }
 
@@ -114,40 +116,51 @@ pub async fn agent_loop(
                 .unwrap_or(serde_json::Value::Null);
 
             // Tool name = capability name. Unknown tools fall back to bash.
-            let capability = if state.capabilities.contains(name) {
-                name.clone()
+            let capability = if state.capabilities.contains(&tc.function.name) {
+                tc.function.name.clone()
             } else {
                 "bash".to_string()
             };
 
-            let req = ExecuteRequest {
-                capability: capability.clone(),
-                params: params.clone(),
-            };
+            exec_meta.push((
+                tc.id.clone(),
+                capability.clone(),
+                tc.function.arguments.clone(),
+            ));
 
-            let start = Instant::now();
-            let result = tools::dispatch_tool(state, req).await;
-            let duration_ms = start.elapsed().as_millis() as u64;
+            futures.push(tools::dispatch_tool(
+                state,
+                ExecuteRequest {
+                    capability,
+                    params,
+                },
+            ));
+        }
 
+        // Run all tool dispatches concurrently
+        let results = futures::future::join_all(futures).await;
+
+        // Process results in order
+        for ((tc_id, capability, input), result) in exec_meta.iter().zip(results.iter()) {
             let exec_record = ExecutionRecord {
                 capability: capability.clone(),
-                input: tc.function.arguments.clone(),
+                input: input.clone(),
                 output: result.output.clone(),
                 error: result.error.clone(),
                 status: result.status.clone(),
-                duration_ms,
+                duration_ms: result.duration_ms,
             };
 
             last_task_id = Some(result.task_id.clone());
             executions.push(exec_record);
 
             let tool_result = match result.status.as_str() {
-                "success" => result.output.unwrap_or_else(|| "(empty)".into()),
-                "denied" => format!("权限不足：{}", result.error.unwrap_or_default()),
-                status => format!("{}：{}", status, result.error.unwrap_or_default()),
+                "success" => result.output.clone().unwrap_or_else(|| "(empty)".into()),
+                "denied" => format!("权限不足：{}", result.error.as_deref().unwrap_or_default()),
+                status => format!("{}：{}", status, result.error.as_deref().unwrap_or_default()),
             };
 
-            messages.push(ChatMessage::tool(&tool_result, &tc.id));
+            messages.push(ChatMessage::tool(&tool_result, tc_id));
         }
     }
 
