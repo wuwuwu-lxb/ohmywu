@@ -2,83 +2,69 @@
 
 > 最后更新：2026-05-14
 
-## 版本：v0.2.0-pre
+## 版本：v0.3.0-pre
 
-## 当前里程碑：M2 完成，即将进入 Phase 3（Action 管道）
+## 当前里程碑：UI 全面升级 + LLM 适配器重构完成
 
 ---
 
 ## M0 完成 ✅
 
 - Tauri v2 + Vue3 + Rust workspace 骨架
-- 7 crates：domain / capability-registry / action-registry / policy-engine / task-engine / audit / session / llm-adapter
 - 全局主题系统 + 可折叠侧栏 + 三栏布局
-- 初始原子能力 bash + read，初始 Action shell.exec / fs.read / system.info
 
 ## M1 完成 ✅ — 原子能力执行闭环 + 会话持久化
 
-### 后端
-- [x] `chrono_now()` 修复 — domain 统一时间戳
 - [x] 数据目录 `~/.ohmywu/{sessions,actions,wiki}/` 初始化
 - [x] `config.json` 读写（PolicyMode、theme、accent、llm_provider）
 - [x] `crates/session` — JSONL 会话管理器
 - [x] `src-tauri/src/executor.rs` — 真实执行管道
-  - bash: `std::process::Command` + 30s 超时
-  - read: `std::fs::read_to_string`
-  - 全链路：capability lookup → policy gate → task create → spawn_blocking → task/audit record
 - [x] AppState 重构 + 14 个 Tauri commands
-- [x] Phase 1 fallback（`read <path>` / `run <cmd>` 指令解析）
-
-### 前端
-- [x] Pinia 状态管理
-- [x] `src/stores/chat.ts` — 会话/消息/流式状态
-- [x] ChatView 接入真实 Tauri 后端
+- [x] Pinia 状态管理 + ChatView 接入真实后端
 
 ## M2 完成 ✅ — Agent 对话核心
 
-### Rust 后端
-- [x] `crates/llm-adapter`
-  - Ollama provider（`/api/chat`，原生 tool calling，NDJSON streaming）
-  - OpenAI-compatible provider（`/v1/chat/completions`，SSE streaming）
-  - 60s HTTP 超时
-- [x] `src/tools.rs` — 能力→Tool 转换（bash/read → OpenAI function calling Schema）
-- [x] `src/agent.rs` — Agent 对话循环
-  - System prompt（中文）
-  - Tool calling loop（最多 10 轮）
-  - 会话历史注入（最近 20 条）
-  - 流式 response via Tauri `chat-stream` event
-- [x] `send_message`：配置 LLM 时走 agent loop，未配置时回退本地指令
-- [x] `test_llm_connection` 命令 + 前端测试按钮
-- [x] 错误信息人性化（按 HTTP status 给出中文提示）
+- [x] `crates/llm-adapter` — Ollama + OpenAI-compatible provider
+- [x] Agent 对话循环（tool calling loop，最多 10 轮）
+- [x] 流式 response via Tauri `chat-stream` event
+- [x] 前端 SettingsView LLM 配置 + 测试连接
 
-### 前端
-- [x] SettingsView LLM 配置（provider/endpoint/model/API key + 测试连接）
-- [x] `chat-stream` event → 实时 token 显示 + 闪烁光标
+## v0.3.0 — UI 全面升级 + LLM 适配器重构 ✅
 
-## 优化轮次 ✅
+### SPlayer 风视觉重做
 
-### 性能 / 逻辑
-- [x] 消除 Arc<AppState> 冗余 clone（executor 改为 `&AppState`）
-- [x] bash 执行加 30s timeout
-- [x] reqwest client 加 60s timeout
-- [x] 流式 tool call 累积修复
-- [x] audit log 封顶 10000 条
-- [x] session list_sessions 只读首尾行（O(1) 替代 O(n)）
-- [x] append_message 序列化移出锁
+- [x] 半透明表面系统：`--surface-1/2/3` 三档可调透明度，`--border-color/hover` 两档边框
+- [x] RGB 色系 token：`--accent-rgb` 分量供 `rgba()` 构造，accent 推导全部表面/边框/hover 颜色
+- [x] SPlayer AppLayout 三层结构：background-container → mask → transparent app shell
+- [x] 字体更换：DM Sans + Space Mono（取代 Inter）
+- [x] 侧栏图标 emoji 化，消息渐入动画（fadeUp stagger）
 
-### 前端美化
-- [x] 全局主题重设计 — Inter + JetBrains Mono 字体，warm charcoal 色系，噪点纹理
-- [x] Chat UI — 移除 iMessage 气泡，改为专业 agent 面板（accent 图标 + 名称头）
-- [x] 输入框 — focus glow + SVG 发送按钮
-- [x] 空状态欢迎页
-- [x] 消息渐入动画（fadeUp stagger）
-- [x] Sidebar — active 高亮，SVG toggle，brand 重设计
-- [x] 零编译 warning
+### 背景系统重写
+
+- [x] 删除 4 个内置 CSS 渐变"壁纸"，默认纯色背景（accent 推导微妙渐变）
+- [x] 三档背景：solid / image / video
+- [x] 自定义图片/视频上传（HTML input → ArrayBuffer → Rust `save_background_file` → `asset://` URL）
+- [x] 背景控制：scale (100-200%) / blur (0-40px) / maskOpacity (0-80%)
+
+### 主题持久化
+
+- [x] `useTheme.ts` 内存状态 → `config.json` 双向同步
+- [x] `initFromConfig()` 启动时恢复全部外观状态
+
+### LLM 适配器重构（book/planapi升级.md）
+
+- [x] 多 Provider 支持：Anthropic / Gemini / OpenAI / Ollama adapter
+- [x] `LlmError` 结构化错误分类（认证/网络/限流/模型/格式错误）
+- [x] `ProviderMetadata` + `builtin_providers()` 作为 provider 单一数据源
+- [x] `ApiFormat` 枚举 + `infer_api_format()` 自动推断
+- [x] `health_check()` / `probe_capabilities()` 能力探测
+- [x] `test_llm_connection_with_config` — 按表单值真测试，返回 `LlmTestResult` 结构化结果
+- [x] `get_llm_providers` — 后端 provider 列表下发前端
 
 ## 已知问题
 
 - DeepSeek API + `deepseek-v4-flash` 返回 400（可能不支持 tool calling 或 streaming+tools）
-- 临时方案：设置页用「测试连接」验证基础连通性；agent loop 待加 no-tools fallback
+- 临时方案：不支持 tools 的模型自动降级为纯文本模式
 
 ## 下一步：Phase 3 — Action 管道
 
