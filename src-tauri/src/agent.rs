@@ -21,13 +21,21 @@ const SYSTEM_PROMPT: &str = "\
 - `web_fetch` — 获取 URL 内容
 - `thinking` — 内部推理和规划
 
+## 权限规则
+
+- 只读工具（read/glob/grep/web_fetch/thinking）始终允许。
+- 写入工具（write/edit）需要用户确认。
+- 高风险工具（bash）需要用户确认。
+- 如果工具返回「需要确认」，先向用户说明要做什么，等待用户同意后再执行。
+- 如果工具返回「权限不足」，说明该操作被安全规则禁止，向用户解释原因。
+- 管理员可以配置 allow/deny 规则，deny 始终覆盖 allow。
+
 ## 核心原则
 
-1. 执行可能造成破坏的操作前，先向用户确认。
-2. 默认使用中文回复，保持简洁友好。
-3. 先简要解释你在做什么，再执行命令。
-4. 不需要工具时就文字回复。
-5. 你直接跑在用户的电脑上，拥有本地执行能力。
+1. 默认使用中文回复，保持简洁友好。
+2. 先简要解释你在做什么，再执行命令。
+3. 不需要工具时就文字回复。
+4. 你直接跑在用户的电脑上，拥有本地执行能力。
 ";
 
 const MAX_ITERATIONS: usize = 10;
@@ -168,6 +176,7 @@ pub async fn agent_loop(
             let tool_result = match result.status.as_str() {
                 "success" => result.output.clone().unwrap_or_else(|| "(empty)".into()),
                 "denied" => format!("权限不足：{}", result.error.as_deref().unwrap_or_default()),
+                "needs_confirm" => result.output.clone().unwrap_or_default(),
                 status => format!("{}：{}", status, result.error.as_deref().unwrap_or_default()),
             };
 

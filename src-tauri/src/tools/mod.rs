@@ -277,7 +277,53 @@ pub async fn dispatch_tool(
         };
     }
 
-    // 3. task creation
+    // 3. permission check (Claude Code style — deny wins, no popups)
+    let permission_result = {
+        let cfg = state.config.read().unwrap();
+        crate::permission::check_permission(
+            &cfg.permissions,
+            &cap_name,
+            &params,
+            Some(ToolKind::from_risk(cap.risk_level)),
+        )
+    };
+
+    match permission_result {
+        crate::permission::PermissionCheck::Denied(msg) => {
+            state.audit.record(
+                "user",
+                &cap_name,
+                "(denied by permission rules)",
+                cap.risk_level,
+                "denied",
+                Some(&msg),
+            );
+            return ExecuteResult {
+                capability: cap_name,
+                status: "denied".into(),
+                output: None,
+                error: Some(msg),
+                task_id: String::new(),
+                duration_ms: 0,
+                policy_decision: "denied".into(),
+            };
+        }
+        crate::permission::PermissionCheck::NeedsConfirm(msg) => {
+            // Return a "needs confirmation" message — the model handles it conversationally
+            return ExecuteResult {
+                capability: cap_name,
+                status: "needs_confirm".into(),
+                output: Some(msg),
+                error: None,
+                task_id: String::new(),
+                duration_ms: 0,
+                policy_decision: "needs_confirm".into(),
+            };
+        }
+        crate::permission::PermissionCheck::Allowed => {}
+    }
+
+    // 4. task creation
     let target = describe_target(&cap_name, &params);
     let task = state.tasks.create(&cap_name, &target);
     let task_id = task.id.clone();

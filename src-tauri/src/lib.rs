@@ -1,6 +1,7 @@
 mod agent;
 mod config;
 mod data_dir;
+mod permission;
 mod tools;
 
 use std::sync::Arc;

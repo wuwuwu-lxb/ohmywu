@@ -3,6 +3,8 @@ use ohmywu_llm_adapter::LlmConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+use crate::permission::PermissionConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "default_policy_mode")]
@@ -28,6 +30,8 @@ pub struct AppConfig {
     pub background_mask_opacity: u8,
     #[serde(default)]
     pub llm_provider: Option<LlmConfig>,
+    #[serde(default)]
+    pub permissions: PermissionConfig,
 }
 
 fn default_policy_mode() -> PolicyMode {
@@ -67,6 +71,7 @@ impl Default for AppConfig {
             background_blur: default_bg_blur(),
             background_mask_opacity: default_bg_mask(),
             llm_provider: None,
+            permissions: PermissionConfig::default(),
         }
     }
 }
