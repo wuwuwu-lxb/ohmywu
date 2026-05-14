@@ -129,8 +129,8 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 .user-text {
   padding: 8px 14px;
   border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
   color: var(--text-secondary);
 }
 
@@ -147,8 +147,8 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
   margin-top: 8px;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
   font-size: var(--text-xs);
   color: var(--text-secondary);
   cursor: pointer;
@@ -156,9 +156,9 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 }
 
 .msg-task-link:hover {
-  border-color: var(--border-default);
+  border-color: var(--border-hover);
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--surface-2);
 }
 
 .link-arrow {

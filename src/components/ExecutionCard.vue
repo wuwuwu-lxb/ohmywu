@@ -43,10 +43,10 @@ const expanded = ref(false)
 
 <style scoped>
 .exec-card {
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   overflow: hidden;
-  background: var(--bg-elevated);
+  background: var(--surface-2);
   margin: 8px 0;
 }
 
@@ -70,7 +70,7 @@ const expanded = ref(false)
 }
 
 .exec-header:hover {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
 }
 
 .exec-status-dot {
@@ -109,7 +109,7 @@ const expanded = ref(false)
 }
 
 .exec-body {
-  border-top: 1px solid var(--border-subtle);
+  border-top: 1px solid var(--border-color);
   padding: 8px 10px;
 }
 
@@ -139,7 +139,7 @@ const expanded = ref(false)
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
-  background: var(--bg-base);
+  background: var(--surface-1);
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   overflow-x: auto;

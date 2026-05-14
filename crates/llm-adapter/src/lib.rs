@@ -1,15 +1,22 @@
 pub mod types;
-pub mod ollama;
-pub mod openai_compat;
+pub mod error;
+pub mod provider;
+pub mod format;
+pub mod adapters;
 
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
+pub use error::LlmError;
+pub use provider::{
+    ApiFormat, HealthStatus, LlmConfig, ProviderCapabilities, ProviderMetadata,
+};
+
 use types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolDef};
 
-/// Result type for LLM operations.
-pub type Result<T> = std::result::Result<T, String>;
+/// Convenience alias using LlmError.
+pub type Result<T> = std::result::Result<T, LlmError>;
 
 /// Trait for LLM providers.
 /// Both local Ollama and cloud APIs implement this.
@@ -28,42 +35,60 @@ pub trait LlmProvider: Send + Sync {
         messages: &[ChatMessage],
         tools: &[ToolDef],
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ChatStreamChunk>> + Send>>>;
-}
 
-/// Configuration for an LLM provider.
-#[derive(Debug, Clone)]
-pub struct LlmConfig {
-    pub provider_type: String,
-    pub endpoint: String,
-    pub model: String,
-    pub api_key: Option<String>,
+    /// Minimal health check — sends a small request to verify the provider is reachable.
+    async fn health_check(&self) -> std::result::Result<HealthStatus, LlmError>;
+
+    /// Probe what this provider can do (tools, streaming) by actually testing.
+    async fn probe_capabilities(&self) -> ProviderCapabilities;
 }
 
 /// Create an LLM provider from configuration.
 pub fn create_provider(config: &LlmConfig) -> Result<Box<dyn LlmProvider>> {
-    match config.provider_type.as_str() {
-        "ollama" => {
+    match config.effective_api_format() {
+        provider::ApiFormat::Ollama => {
             let endpoint = if config.endpoint.is_empty() {
                 "http://localhost:11434".to_string()
             } else {
                 config.endpoint.clone()
             };
-            Ok(Box::new(ollama::OllamaProvider::new(
+            Ok(Box::new(adapters::ollama::OllamaProvider::new(
                 endpoint,
                 config.model.clone(),
             )))
         }
-        "openai_compatible" => {
+        provider::ApiFormat::OpenAiChat | provider::ApiFormat::OpenAiResponses => {
             let api_key = config
                 .api_key
                 .clone()
-                .ok_or_else(|| "API key required for OpenAI-compatible provider".to_string())?;
-            Ok(Box::new(openai_compat::OpenAiCompatProvider::new(
+                .ok_or(LlmError::Authentication)?;
+            Ok(Box::new(adapters::openai_chat::OpenAiChatProvider::new(
                 config.endpoint.clone(),
                 config.model.clone(),
                 api_key,
             )))
         }
-        other => Err(format!("Unknown provider type: {}", other)),
+        provider::ApiFormat::Anthropic => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or(LlmError::Authentication)?;
+            Ok(Box::new(adapters::anthropic::AnthropicProvider::new(
+                config.endpoint.clone(),
+                config.model.clone(),
+                api_key,
+            )))
+        }
+        provider::ApiFormat::Gemini => {
+            let api_key = config
+                .api_key
+                .clone()
+                .ok_or(LlmError::Authentication)?;
+            Ok(Box::new(adapters::gemini::GeminiProvider::new(
+                config.endpoint.clone(),
+                config.model.clone(),
+                api_key,
+            )))
+        }
     }
 }

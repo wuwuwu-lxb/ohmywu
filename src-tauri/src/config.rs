@@ -1,4 +1,5 @@
 use ohmywu_domain::PolicyMode;
+use ohmywu_llm_adapter::LlmConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -10,20 +11,23 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default = "default_accent")]
     pub accent: String,
+    /// "solid" | "image" | "video"
+    #[serde(default = "default_background_mode")]
+    pub background_mode: String,
+    /// surface translucency 35-88
+    #[serde(default = "default_surface_opacity")]
+    pub surface_opacity: u8,
+    /// background image scale (1.0 = native)
+    #[serde(default = "default_bg_scale")]
+    pub background_scale: f32,
+    /// background blur px
+    #[serde(default = "default_bg_blur")]
+    pub background_blur: u8,
+    /// mask opacity 0-100
+    #[serde(default = "default_bg_mask")]
+    pub background_mask_opacity: u8,
     #[serde(default)]
     pub llm_provider: Option<LlmConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    #[serde(default = "default_provider_type")]
-    pub provider_type: String,
-    #[serde(default = "default_ollama_endpoint")]
-    pub endpoint: String,
-    #[serde(default = "default_model")]
-    pub model: String,
-    #[serde(default)]
-    pub api_key: Option<String>,
 }
 
 fn default_policy_mode() -> PolicyMode {
@@ -35,14 +39,20 @@ fn default_theme() -> String {
 fn default_accent() -> String {
     "#3b82f6".into()
 }
-fn default_provider_type() -> String {
-    "ollama".into()
+fn default_background_mode() -> String {
+    "solid".into()
 }
-fn default_ollama_endpoint() -> String {
-    "http://localhost:11434".into()
+fn default_surface_opacity() -> u8 {
+    72
 }
-fn default_model() -> String {
-    "qwen2.5".into()
+fn default_bg_scale() -> f32 {
+    1.0
+}
+fn default_bg_blur() -> u8 {
+    0
+}
+fn default_bg_mask() -> u8 {
+    30
 }
 
 impl Default for AppConfig {
@@ -51,6 +61,11 @@ impl Default for AppConfig {
             policy_mode: default_policy_mode(),
             theme: default_theme(),
             accent: default_accent(),
+            background_mode: default_background_mode(),
+            surface_opacity: default_surface_opacity(),
+            background_scale: default_bg_scale(),
+            background_blur: default_bg_blur(),
+            background_mask_opacity: default_bg_mask(),
             llm_provider: None,
         }
     }

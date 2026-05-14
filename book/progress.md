@@ -88,6 +88,11 @@
 - [ ] Action 作为 LLM tool 暴露
 - [ ] Action 验证（dry-run）
 
+## 参考材料
+
+- [Claude Code 架构参考](claude-reference.md) — 基于泄露源码的深度分析，涵盖 agent loop、工具系统、权限、上下文管理、记忆系统等
+- [LLM 适配器升级计划](planapi升级.md) — 参考 cc-switch 升级至多协议多 provider 兼容、错误分类、能力探测
+
 ## 仓库
 
 https://github.com/wuwuwu-lxb/ohmywu

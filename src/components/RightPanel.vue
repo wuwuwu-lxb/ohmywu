@@ -32,10 +32,12 @@ const emit = defineEmits<{ close: [] }>()
 .right-panel {
   width: 0;
   min-width: 0;
-  background: var(--bg-surface);
-  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  border-left: 1px solid var(--border-color);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   overflow: hidden;
-  transition: width 0.2s ease;
+  transition: width 0.25s ease, background 0.3s ease;
   display: flex;
   flex-direction: column;
 }
@@ -50,7 +52,7 @@ const emit = defineEmits<{ close: [] }>()
   justify-content: space-between;
   height: var(--titlebar-h);
   padding: 0 14px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
@@ -78,7 +80,7 @@ const emit = defineEmits<{ close: [] }>()
 
 .panel-close:hover {
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--hover-bg);
 }
 
 .panel-body {

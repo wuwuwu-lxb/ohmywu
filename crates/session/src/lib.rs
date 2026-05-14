@@ -1,9 +1,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
-use ohmywu_domain;
 use serde::{Deserialize, Serialize};
 
 /// One message in a session.
@@ -135,7 +134,7 @@ impl SessionManager {
                 Err(_) => continue,
             };
             let path = entry.path();
-            if path.extension().map_or(true, |ext| ext != "jsonl") {
+            if path.extension().is_none_or(|ext| ext != "jsonl") {
                 continue;
             }
 
@@ -230,10 +229,10 @@ impl SessionManager {
             let name = fname.to_string_lossy();
             if name.starts_with(&prefix) && name.ends_with(".jsonl") {
                 let num_str = &name[prefix.len()..name.len() - 5];
-                if let Ok(n) = num_str.parse::<u32>() {
-                    if n > max_counter {
-                        max_counter = n;
-                    }
+                if let Ok(n) = num_str.parse::<u32>()
+                    && n > max_counter
+                {
+                    max_counter = n;
                 }
             }
         }

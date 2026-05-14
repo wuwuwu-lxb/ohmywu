@@ -150,7 +150,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--bg-base);
 }
 
 /* ── Session Bar ──────────────────────────────────────────────── */
@@ -159,9 +158,11 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   padding: 6px 16px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  background: var(--bg-surface);
+  background: var(--surface-2);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .session-select {
@@ -180,13 +181,13 @@ onMounted(async () => {
 }
 
 .session-select:hover {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
   color: var(--text-primary);
 }
 
 .session-select:focus {
-  border-color: var(--border-default);
-  background: var(--bg-elevated);
+  border-color: var(--border-hover);
+  background: var(--surface-2);
 }
 
 .session-btn {
@@ -205,9 +206,9 @@ onMounted(async () => {
 }
 
 .session-btn:hover {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
   color: var(--text-primary);
-  border-color: var(--border-subtle);
+  border-color: var(--border-color);
 }
 
 /* ── Messages Area ────────────────────────────────────────────── */
@@ -283,8 +284,8 @@ onMounted(async () => {
 .hint {
   padding: 6px 12px;
   border-radius: var(--radius-md);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-2);
+  border: 1px solid var(--border-color);
   font-size: var(--text-xs);
   color: var(--text-secondary);
   cursor: pointer;
@@ -292,9 +293,9 @@ onMounted(async () => {
 }
 
 .hint:hover {
-  border-color: var(--border-default);
+  border-color: var(--border-hover);
   color: var(--text-primary);
-  background: var(--bg-hover);
+  background: var(--hover-bg);
 }
 
 /* ── Streaming ────────────────────────────────────────────────── */
@@ -405,8 +406,10 @@ onMounted(async () => {
   margin: 0 auto;
   padding: 6px 6px 6px 16px;
   border-radius: var(--radius-lg);
-  border: 1px solid var(--border-default);
-  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  background: var(--surface-2);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
 }
 
@@ -463,7 +466,7 @@ onMounted(async () => {
 }
 
 .send-btn.pending {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
 }
 
 .spinner {

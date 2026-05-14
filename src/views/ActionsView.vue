@@ -66,9 +66,16 @@ onMounted(async () => {
   align-items: center;
   gap: 12px;
   padding: 10px 14px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-surface);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.action-card:hover {
+  border-color: var(--border-hover);
+  background: var(--surface-2);
 }
 
 .action-id {

@@ -66,21 +66,26 @@ onMounted(async () => {
 .audit-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .audit-row {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-surface);
   font-size: 12px;
   font-family: var(--font-mono);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .audit-row:hover {
-  background: var(--bg-hover);
+  border-color: var(--border-hover);
+  background: var(--surface-2);
 }
 
 .risk-badge {

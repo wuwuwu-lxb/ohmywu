@@ -56,10 +56,18 @@ const emit = defineEmits<{ select: [id: string] }>()
   flex-direction: column;
   width: var(--sidebar-w);
   min-width: 0;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border-subtle);
-  transition: width var(--duration-normal) var(--ease-in-out);
+  background: var(--surface-2);
+  border-right: 1px solid var(--border-color);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  transition: width var(--duration-normal) var(--ease-in-out), background 0.3s ease;
   overflow: hidden;
+  animation: slideIn 0.4s var(--ease-out);
+}
+
+@keyframes slideIn {
+  from { transform: translateX(-20px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
 }
 
 .sidebar.collapsed {
@@ -73,7 +81,7 @@ const emit = defineEmits<{ select: [id: string] }>()
   justify-content: space-between;
   height: var(--titlebar-h);
   padding: 0 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
@@ -90,7 +98,7 @@ const emit = defineEmits<{ select: [id: string] }>()
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-xs);
-  background: var(--accent-soft);
+  background: linear-gradient(135deg, var(--accent-soft), color-mix(in srgb, var(--accent) 20%, transparent));
   color: var(--accent);
   font-size: 12px;
 }
@@ -117,7 +125,7 @@ const emit = defineEmits<{ select: [id: string] }>()
 }
 
 .toggle-btn:hover {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
   color: var(--text-secondary);
 }
 
@@ -150,12 +158,12 @@ const emit = defineEmits<{ select: [id: string] }>()
 }
 
 .nav-item:hover {
-  background: var(--bg-hover);
+  background: var(--hover-bg);
   color: var(--text-primary);
 }
 
 .nav-item.active {
-  background: var(--bg-active);
+  background: var(--active-bg);
   color: var(--text-primary);
 }
 
@@ -189,7 +197,7 @@ const emit = defineEmits<{ select: [id: string] }>()
 
 .footer-divider {
   height: 1px;
-  background: var(--border-subtle);
+  background: var(--border-color);
   margin-bottom: 6px;
 }
 </style>

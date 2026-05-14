@@ -17,6 +17,9 @@ use ohmywu_session::{
 };
 use ohmywu_task_engine::TaskEngine;
 use tauri::Manager;
+use ohmywu_domain::AuditEvent;
+use ohmywu_llm_adapter::{HealthStatus, LlmConfig, ProviderMetadata};
+use serde::{Deserialize, Serialize};
 
 use config::AppConfig;
 
@@ -107,8 +110,13 @@ fn get_tasks(state: tauri::State<AppState>) -> Vec<Task> {
 }
 
 #[tauri::command]
+fn get_llm_providers() -> Vec<ProviderMetadata> {
+    ohmywu_llm_adapter::provider::builtin_providers().to_vec()
+}
+
+#[tauri::command]
 fn get_audits(state: tauri::State<AppState>) -> Vec<AuditEvent> {
-    state.audit.list(100)
+    state.audit.list(200)
 }
 
 // ── Tauri Commands: execution ────────────────────────────────────
@@ -196,47 +204,22 @@ async fn send_message(
     };
 
     // Phase 2: LLM agent loop (with fallback to Phase 1 mock if no LLM configured)
-    let agent_response = if let Some(llm_cfg) = llm_config {
-        let llm_adapter_config = ohmywu_llm_adapter::LlmConfig {
-            provider_type: llm_cfg.provider_type,
-            endpoint: llm_cfg.endpoint,
-            model: llm_cfg.model,
-            api_key: llm_cfg.api_key,
-        };
-
+    let agent_response = if let Some(llm_config) = llm_config {
         agent::agent_loop(
             &state,
             &session_id,
             &content,
-            &llm_adapter_config,
+            &llm_config,
             Some(&app_handle),
         )
         .await
         .unwrap_or_else(|e| {
-            let context = format!(
-                "（endpoint: {}, model: {}）",
-                llm_adapter_config.endpoint, llm_adapter_config.model
+            let friendly = format!(
+                "{}（endpoint: {}, model: {}）\n\n本地指令：`read <路径>` / `run <命令>`",
+                e.user_friendly(),
+                llm_config.endpoint,
+                llm_config.model,
             );
-            let friendly = match e.as_str() {
-                s if s.contains("400") => format!(
-                    "请求格式错误 {}。\n请检查 Model 名称是否正确（如 qwen2.5、llama3.2）。\n用 `ollama list` 查看已下载的模型。\n\n本地指令：`read <路径>` / `run <命令>`",
-                    context
-                ),
-                s if s.contains("401") => "API Key 无效，请在设置中更新。".into(),
-                s if s.contains("404") => format!(
-                    "Endpoint 无法访问 {}。\n确认 Ollama 已在 {} 启动。",
-                    context, llm_adapter_config.endpoint
-                ),
-                s if s.contains("timeout") || s.contains("Timeout") => "请求超时，请检查网络或模型服务状态。".into(),
-                s if s.contains("connection") || s.contains("Connect") => format!(
-                    "无法连接到 {}。\n请确认 Ollama 已启动（ollama serve）。",
-                    llm_adapter_config.endpoint
-                ),
-                _ => format!(
-                    "LLM 暂时不可用。{}\n\n本地指令：`read <路径>` / `run <命令>`",
-                    e
-                ),
-            };
             agent::AgentResponse {
                 content: friendly,
                 executions: vec![],
@@ -352,31 +335,59 @@ async fn test_llm_connection(
         None => return Err("未配置 LLM。".into()),
     };
 
-    // Try a minimal chat without tools
-    let adapter_cfg = ohmywu_llm_adapter::LlmConfig {
-        provider_type: llm_cfg.provider_type,
-        endpoint: llm_cfg.endpoint.clone(),
-        model: llm_cfg.model.clone(),
-        api_key: llm_cfg.api_key,
-    };
+    // Try using health_check
+    let provider = ohmywu_llm_adapter::create_provider(&llm_cfg)
+        .map_err(|e| e.user_friendly().to_string())?;
 
-    let provider = ohmywu_llm_adapter::create_provider(&adapter_cfg)?;
-    let messages = vec![
-        ohmywu_llm_adapter::types::ChatMessage::user("ping"),
-    ];
-    let tools = vec![];
-
-    // Use non-streaming for test
-    match provider.chat(&messages, &tools).await {
-        Ok(resp) => Ok(format!(
-            "连接成功！Model: {}, Response: {}",
-            llm_cfg.model,
-            resp.content.unwrap_or_else(|| "(no content)".into())
-        )),
+    match provider.health_check().await {
+        Ok(status) => {
+            let HealthStatus::Ok { model, latency_ms } = status;
+            Ok(format!("连接成功！Model: {}, 延迟: {}ms", model, latency_ms))
+        }
         Err(e) => Err(format!(
             "连接失败 — {}:{} — {}",
-            llm_cfg.endpoint, llm_cfg.model, e
+            llm_cfg.endpoint,
+            llm_cfg.model,
+            e.user_friendly()
         )),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmTestResult {
+    pub success: bool,
+    pub message: String,
+    pub model: Option<String>,
+    pub latency_ms: Option<u64>,
+}
+
+#[tauri::command]
+async fn test_llm_connection_with_config(
+    provider_type: String,
+    endpoint: String,
+    model: String,
+    api_key: Option<String>,
+) -> Result<LlmTestResult, String> {
+    let llm_cfg = LlmConfig::new(&provider_type, &endpoint, &model, api_key);
+    let provider = ohmywu_llm_adapter::create_provider(&llm_cfg)
+        .map_err(|e| e.user_friendly().to_string())?;
+    match provider.health_check().await {
+        Ok(status) => {
+            let HealthStatus::Ok { model, latency_ms } = status;
+            Ok(LlmTestResult {
+                success: true,
+                message: format!("连接成功！Model: {}, 延迟: {}ms", model, latency_ms),
+                model: Some(model),
+                latency_ms: Some(latency_ms),
+            })
+        }
+        Err(e) => Ok(LlmTestResult {
+            success: false,
+            message: format!("连接失败 — {} — {}", e.user_friendly(), llm_cfg.endpoint),
+            model: None,
+            latency_ms: None,
+        }),
     }
 }
 
@@ -405,6 +416,34 @@ async fn save_config(
     Ok(())
 }
 
+// ── Tauri Commands: background ───────────────────────────────────
+
+#[tauri::command]
+fn save_background_file(data: Vec<u8>, filename: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let bg_dir = state.data_dir.join("background");
+    std::fs::create_dir_all(&bg_dir).map_err(|e| format!("Create bg dir: {}", e))?;
+    let path = bg_dir.join(&filename);
+    std::fs::write(&path, &data).map_err(|e| format!("Write bg file: {}", e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn get_background_path(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
+    let bg_dir = state.data_dir.join("background");
+    if !bg_dir.exists() {
+        return Ok(None);
+    }
+    // return the first file found (bg_image.* or bg_video.*)
+    for entry in std::fs::read_dir(&bg_dir).map_err(|e| format!("Read bg dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Read entry: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("bg_image.") || name.starts_with("bg_video.") {
+            return Ok(Some(entry.path().to_string_lossy().to_string()));
+        }
+    }
+    Ok(None)
+}
+
 // ── Tauri App Entry ──────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -424,6 +463,7 @@ pub fn run() {
             get_policy_mode,
             get_tasks,
             get_audits,
+            get_llm_providers,
             execute_capability,
             set_policy_mode,
             create_session,
@@ -434,6 +474,9 @@ pub fn run() {
             get_config,
             save_config,
             test_llm_connection,
+            test_llm_connection_with_config,
+            save_background_file,
+            get_background_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

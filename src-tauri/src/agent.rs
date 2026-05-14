@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use ohmywu_domain::chrono_now;
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall};
-use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmProvider};
+use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
 use tauri::Emitter;
 
@@ -38,9 +38,21 @@ pub async fn agent_loop(
     user_message: &str,
     llm_config: &LlmConfig,
     app_handle: Option<&tauri::AppHandle>,
-) -> Result<AgentResponse, String> {
+) -> std::result::Result<AgentResponse, LlmError> {
     let provider = create_provider(llm_config)?;
-    let tools = capabilities_as_tools(state);
+
+    // Step 1: Health check — fast fail if unreachable
+    provider.health_check().await?;
+
+    // Step 2: Probe capabilities — detect whether tools/streaming are supported
+    let caps = provider.probe_capabilities().await;
+    let tools = if caps.supports_streaming_with_tools {
+        capabilities_as_tools(state)
+    } else {
+        // Model doesn't support tools (e.g. DeepSeek), fall back to pure text
+        vec![]
+    };
+
     let mut executions: Vec<ExecutionRecord> = Vec::new();
     let mut last_task_id: Option<String> = None;
 
@@ -64,15 +76,15 @@ pub async fn agent_loop(
 
     // conversation loop
     for _iteration in 0..MAX_ITERATIONS {
-        let response: ChatResponse = if app_handle.is_some() {
+        let response: ChatResponse = if let Some(handle) = app_handle {
             // streaming mode: collect all content and tool calls
-            chat_with_streaming(provider.as_ref(), &messages, &tools, app_handle.unwrap()).await?
+            chat_with_streaming(provider.as_ref(), &messages, &tools, handle).await?
         } else {
             provider.chat(&messages, &tools).await?
         };
 
         // If the assistant responds with content only (no tool calls), return it
-        if response.tool_calls.is_none() || response.tool_calls.as_ref().map_or(true, |tc| tc.is_empty()) {
+        if response.tool_calls.is_none() || response.tool_calls.as_ref().is_none_or(|tc| tc.is_empty()) {
             let content = response.content.unwrap_or_default();
             return Ok(AgentResponse {
                 content,
@@ -156,7 +168,7 @@ async fn chat_with_streaming(
     messages: &[ChatMessage],
     tools: &[ohmywu_llm_adapter::types::ToolDef],
     app_handle: &tauri::AppHandle,
-) -> Result<ChatResponse, String> {
+) -> std::result::Result<ChatResponse, LlmError> {
     use futures::StreamExt;
 
     let mut stream = provider.chat_stream(messages, tools).await?;
@@ -171,12 +183,12 @@ async fn chat_with_streaming(
                 }
 
                 // Accumulate tool call deltas
-                if let Some(ref delta) = c.tool_call_delta {
-                    if let Some(ref args) = delta.arguments_delta {
-                        // Try parsing as a complete tool call
-                        if let Ok(tcs) = serde_json::from_str::<Vec<ToolCall>>(args) {
-                            full_tool_calls.extend(tcs);
-                        }
+                if let Some(ref delta) = c.tool_call_delta
+                    && let Some(ref args) = delta.arguments_delta
+                {
+                    // Try parsing as a complete tool call
+                    if let Ok(tcs) = serde_json::from_str::<Vec<ToolCall>>(args) {
+                        full_tool_calls.extend(tcs);
                     }
                 }
 
