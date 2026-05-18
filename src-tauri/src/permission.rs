@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use ohmywu_domain::AgentMode;
+
 use crate::tools::ToolKind;
 
 /// Permission configuration — Claude Code style allow/deny rules.
@@ -38,6 +40,7 @@ pub fn check_permission(
     tool_name: &str,
     params: &serde_json::Value,
     tool_kind: Option<ToolKind>,
+    agent_mode: AgentMode,
 ) -> PermissionCheck {
     // Collect params into a flat string for pattern matching
     let param_str = params_as_string(tool_name, params);
@@ -73,8 +76,9 @@ pub fn check_permission(
     }
 
     // Phase 3: risk-based check (no rules, or allowed by rules)
-    match tool_kind {
-        Some(ToolKind::HighRisk) => PermissionCheck::NeedsConfirm(format!(
+    match (agent_mode, tool_kind) {
+        (AgentMode::Auto, Some(ToolKind::HighRisk)) => PermissionCheck::Allowed,
+        (_, Some(ToolKind::HighRisk)) => PermissionCheck::NeedsConfirm(format!(
             "需要确认: 执行 {} {}?", tool_name, param_str
         )),
         _ => PermissionCheck::Allowed,
@@ -163,6 +167,7 @@ fn simple_match(pattern: &str, text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ohmywu_domain::AgentMode;
 
     #[test]
     fn test_simple_match() {
@@ -194,7 +199,7 @@ mod tests {
             }],
         };
         let params = serde_json::json!({"command": "rm -rf /"});
-        let result = check_permission(&config, "bash", &params, Some(ToolKind::HighRisk));
+        let result = check_permission(&config, "bash", &params, Some(ToolKind::HighRisk), AgentMode::Agent);
         assert!(matches!(result, PermissionCheck::Denied(_)));
     }
 
@@ -213,7 +218,7 @@ mod tests {
             ],
         };
         let params = serde_json::json!({"command": "ls -la"});
-        let result = check_permission(&config, "bash", &params, Some(ToolKind::HighRisk));
+        let result = check_permission(&config, "bash", &params, Some(ToolKind::HighRisk), AgentMode::Agent);
         // ls is allowed by allow rules → confirm (needs user ok since it's HighRisk)
         assert!(matches!(result, PermissionCheck::NeedsConfirm(_)));
     }
@@ -222,7 +227,7 @@ mod tests {
     fn test_check_permission_readonly_allowed() {
         let config = PermissionConfig::default();
         let params = serde_json::json!({"path": "/etc/hosts"});
-        let result = check_permission(&config, "read", &params, Some(ToolKind::ReadOnly));
+        let result = check_permission(&config, "read", &params, Some(ToolKind::ReadOnly), AgentMode::Agent);
         assert!(matches!(result, PermissionCheck::Allowed));
     }
 
@@ -232,12 +237,12 @@ mod tests {
         // No rules → default behavior: ReadOnly allowed, HighRisk needs confirm
         let r_params = serde_json::json!({"path": "/tmp"});
         assert!(matches!(
-            check_permission(&config, "read", &r_params, Some(ToolKind::ReadOnly)),
+            check_permission(&config, "read", &r_params, Some(ToolKind::ReadOnly), AgentMode::Agent),
             PermissionCheck::Allowed
         ));
         let b_params = serde_json::json!({"command": "ls"});
         assert!(matches!(
-            check_permission(&config, "bash", &b_params, Some(ToolKind::HighRisk)),
+            check_permission(&config, "bash", &b_params, Some(ToolKind::HighRisk), AgentMode::Agent),
             PermissionCheck::NeedsConfirm(_)
         ));
     }

@@ -11,6 +11,8 @@ pub struct SessionMessage {
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub executions: Option<Vec<ExecutionRecord>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_id: Option<String>,

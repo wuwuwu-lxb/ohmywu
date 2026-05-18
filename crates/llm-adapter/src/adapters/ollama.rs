@@ -1,8 +1,9 @@
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use serde::Deserialize;
 use std::pin::Pin;
 
+use crate::adapters::buffered_line_stream;
 use crate::error::LlmError;
 use crate::format::openai_chat;
 use crate::types::*;
@@ -123,6 +124,7 @@ impl LlmProvider for OllamaProvider {
         Ok(ChatResponse {
             role,
             content,
+            reasoning_content: None,
             tool_calls: tool_calls.filter(|tc: &Vec<ToolCall>| !tc.is_empty()),
         })
     }
@@ -151,49 +153,35 @@ impl LlmProvider for OllamaProvider {
             return Err(LlmError::from_http_status(status, &text, !tools.is_empty()));
         }
 
-        let stream = resp.bytes_stream().map(|item| match item {
-            Err(e) => vec![Err(LlmError::Connection(e.to_string()))],
-            Ok(bytes) => {
-                let text = String::from_utf8_lossy(&bytes);
-                let mut chunks = Vec::new();
-                for line in text.lines() {
-                    let line = line.trim();
-                    if line.is_empty() {
-                        continue;
-                    }
-                    match serde_json::from_str::<OllamaStreamChunk>(line) {
-                        Ok(chunk) => {
-                            let content_delta = if chunk.message.content.is_empty() {
-                                None
-                            } else {
-                                Some(chunk.message.content)
-                            };
-                            let tool_delta = chunk.message.tool_calls.map(|tc| ToolCallDelta {
-                                index: 0,
-                                id: None,
-                                name: None,
-                                arguments_delta: Some(
-                                    serde_json::to_string(&tc).unwrap_or_default(),
-                                ),
-                            });
-                            chunks.push(Ok(ChatStreamChunk {
-                                content_delta,
-                                tool_call_delta: tool_delta,
-                                done: chunk.done,
-                            }));
-                        }
-                        Err(e) => {
-                            chunks.push(Err(LlmError::Protocol(e.to_string())));
-                        }
-                    }
-                }
-                chunks
+        Ok(buffered_line_stream(resp, |line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return Ok(None);
             }
-        })
-        .map(futures::stream::iter)
-        .flatten();
-
-        Ok(Box::pin(stream))
+            let chunk: OllamaStreamChunk =
+                serde_json::from_str(line).map_err(|e| LlmError::Protocol(e.to_string()))?;
+            let content_delta = if chunk.message.content.is_empty() {
+                None
+            } else {
+                Some(chunk.message.content)
+            };
+            let tool_call_delta = chunk
+                .message
+                .tool_calls
+                .and_then(|mut tc| tc.drain(..).next())
+                .map(|call| ToolCallDelta {
+                    index: 0,
+                    id: Some(call.id),
+                    name: Some(call.function.name),
+                    arguments_delta: Some(call.function.arguments),
+                });
+            Ok(Some(ChatStreamChunk {
+                content_delta,
+                reasoning_delta: None,
+                tool_call_delta,
+                done: chunk.done,
+            }))
+        }))
     }
 
     async fn health_check(&self) -> std::result::Result<crate::HealthStatus, LlmError> {

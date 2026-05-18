@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use std::pin::Pin;
 
+use crate::adapters::buffered_line_stream;
 use crate::error::LlmError;
 use crate::format::gemini;
 use crate::types::*;
@@ -102,27 +103,7 @@ impl LlmProvider for GeminiProvider {
             return Err(LlmError::from_http_status(status, &text, !tools.is_empty()));
         }
 
-        let stream = resp
-            .bytes_stream()
-            .map(|item| match item {
-                Err(e) => vec![Err(LlmError::Connection(e.to_string()))],
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    let mut chunks = Vec::new();
-                    for line in text.lines() {
-                        match gemini::parse_stream_line(line) {
-                            Ok(Some(chunk)) => chunks.push(Ok(chunk)),
-                            Ok(None) => {}
-                            Err(e) => chunks.push(Err(e)),
-                        }
-                    }
-                    chunks
-                }
-            })
-            .map(futures::stream::iter)
-            .flatten();
-
-        Ok(Box::pin(stream))
+        Ok(buffered_line_stream(resp, gemini::parse_stream_line))
     }
 
     async fn health_check(&self) -> std::result::Result<HealthStatus, LlmError> {

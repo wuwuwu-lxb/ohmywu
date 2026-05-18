@@ -37,11 +37,15 @@ impl LlmError {
             400 => {
                 // Detect tool incompatibility
                 if request_had_tools
-                    && (body_lower.contains("tool")
-                        || body_lower.contains("function")
-                        || body_lower.contains("not supported")
-                        || body_lower.contains("not allowed")
-                        || body_lower.contains("invalid_request"))
+                    && (
+                        body_lower.contains("does not support tool")
+                        || body_lower.contains("doesn't support tool")
+                        || body_lower.contains("tool calling is not supported")
+                        || body_lower.contains("function calling is not supported")
+                        || body_lower.contains("tools are not supported")
+                        || body_lower.contains("tool_calls are not supported")
+                        || body_lower.contains("function calling not supported")
+                    )
                 {
                     Self::Incompatible(body_lower)
                 } else if body_lower.contains("not found")

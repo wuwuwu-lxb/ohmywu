@@ -14,6 +14,8 @@ export interface ChatMsg {
   timestamp: number
 }
 
+export type AgentMode = "plan" | "agent" | "auto"
+
 export interface ExecutionInfo {
   action: string
   status: "running" | "success" | "failed"
@@ -53,6 +55,36 @@ interface StreamChunk {
   done: boolean
 }
 
+interface RuntimeTurn {
+  id: string
+  threadId: string
+  sessionId: string
+  status: string
+  agentMode: AgentMode
+  userContent: string
+  assistantContent?: string | null
+  executionCount: number
+  checklistCount: number
+  startedAt: string
+  finishedAt?: string | null
+}
+
+interface RuntimeEvent {
+  id?: string
+  threadId?: string
+  turnId?: string | null
+  kind: string
+  summary: string
+  timestamp?: string | null
+  sessionId?: string
+  status?: string
+}
+
+interface RuntimeThreadView {
+  turns: RuntimeTurn[]
+  events: RuntimeEvent[]
+}
+
 let _msgId = 0
 function nextId() {
   return `msg-${++_msgId}`
@@ -85,15 +117,32 @@ export const useChatStore = defineStore("chat", () => {
   const pending = ref(false)
   const error = ref<string | null>(null)
   const streamingContent = ref("")
+  const agentMode = ref<AgentMode>("agent")
+  const runtimeTurns = ref<RuntimeTurn[]>([])
+  const runtimeEvents = ref<RuntimeEvent[]>([])
+  const runtimeStatus = ref("Ready")
 
   let unlistenStream: UnlistenFn | null = null
+  let unlistenRuntime: UnlistenFn | null = null
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value)
   )
+  const latestRuntimeEvent = computed(() =>
+    runtimeEvents.value.length ? runtimeEvents.value[runtimeEvents.value.length - 1] : null
+  )
 
   async function init() {
     try {
+      agentMode.value = await invoke<AgentMode>("get_agent_mode")
+      if (!unlistenRuntime) {
+        unlistenRuntime = await listen<RuntimeEvent>("runtime-event", (event) => {
+          const payload = event.payload
+          if (payload.sessionId && payload.sessionId !== currentSessionId.value) return
+          runtimeEvents.value.push(payload)
+          runtimeStatus.value = payload.summary || payload.kind
+        })
+      }
       const list = await invoke<SessionSummary[]>("list_sessions")
       sessions.value = list
       if (list.length > 0) {
@@ -121,6 +170,9 @@ export const useChatStore = defineStore("chat", () => {
       sessions.value.unshift(summary)
       currentSessionId.value = summary.id
       messages.value = []
+      runtimeTurns.value = []
+      runtimeEvents.value = []
+      runtimeStatus.value = "Ready"
     } catch (e) {
       console.error("Create session:", e)
       error.value = String(e)
@@ -132,8 +184,25 @@ export const useChatStore = defineStore("chat", () => {
       const msgs = await invoke<BackendMessage[]>("load_session", { sessionId: id })
       messages.value = msgs.map(backendMsgToChatMsg)
       currentSessionId.value = id
+      await loadRuntimeThread(id)
     } catch (e) {
       console.error("Load session:", e)
+    }
+  }
+
+  async function loadRuntimeThread(sessionId: string) {
+    try {
+      const view = await invoke<RuntimeThreadView | null>("load_runtime_thread", { sessionId })
+      runtimeTurns.value = view?.turns || []
+      runtimeEvents.value = view?.events || []
+      runtimeStatus.value = view?.events?.length
+        ? view.events[view.events.length - 1].summary
+        : "Ready"
+    } catch (e) {
+      console.error("Load runtime thread:", e)
+      runtimeTurns.value = []
+      runtimeEvents.value = []
+      runtimeStatus.value = "Runtime unavailable"
     }
   }
 
@@ -179,6 +248,7 @@ export const useChatStore = defineStore("chat", () => {
       } else {
         messages.value.push(backendMsgToChatMsg(response))
       }
+      await loadRuntimeThread(currentSessionId.value)
       await refreshSessions()
     } catch (e) {
       console.error("Send message:", e)
@@ -214,6 +284,16 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  async function setAgentMode(mode: AgentMode) {
+    try {
+      agentMode.value = await invoke<AgentMode>("set_agent_mode", { mode })
+      runtimeStatus.value = `Mode: ${agentMode.value}`
+    } catch (e) {
+      console.error("Set agent mode:", e)
+      error.value = String(e)
+    }
+  }
+
   async function cancelAgent() {
     try {
       await invoke("cancel_agent")
@@ -229,12 +309,19 @@ export const useChatStore = defineStore("chat", () => {
     pending,
     error,
     streamingContent,
+    agentMode,
+    runtimeTurns,
+    runtimeEvents,
+    runtimeStatus,
+    latestRuntimeEvent,
     currentSession,
     init,
     createSession,
     loadSession,
+    loadRuntimeThread,
     refreshSessions,
     sendMessage,
+    setAgentMode,
     cancelAgent,
   }
 })

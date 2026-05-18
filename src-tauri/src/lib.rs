@@ -2,6 +2,7 @@ mod agent;
 mod config;
 mod data_dir;
 mod permission;
+mod runtime;
 mod tools;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,6 +18,7 @@ use ohmywu_session::{
     ExecutionRecord, SessionManager, SessionMessage, SessionSummary,
 };
 use ohmywu_task_engine::TaskEngine;
+use tauri::Emitter;
 use tauri::Manager;
 use ohmywu_domain::AuditEvent;
 use ohmywu_llm_adapter::{HealthStatus, LlmConfig, ProviderMetadata};
@@ -24,6 +26,7 @@ use ohmywu_wiki::WikiEngine;
 use serde::{Deserialize, Serialize};
 
 use config::AppConfig;
+use runtime::{RuntimeStore, RuntimeThreadView};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +39,7 @@ pub struct AppState {
     pub config: Arc<RwLock<AppConfig>>,
     pub data_dir: std::path::PathBuf,
     pub wiki: Arc<RwLock<WikiEngine>>,
+    pub runtime: Arc<RuntimeStore>,
     pub cancel_token: Arc<AtomicBool>,
 }
 
@@ -47,6 +51,10 @@ impl AppState {
         let tasks = Arc::new(TaskEngine::new());
         let audit = Arc::new(AuditLog::new());
         let session = Arc::new(SessionManager::new(data_dir.join("sessions")));
+        let runtime = Arc::new(
+            RuntimeStore::new(data_dir.join("runtime"))
+                .expect("failed to initialize runtime store"),
+        );
 
         // load config, apply policy mode
         let config: AppConfig = config::load_config(&data_dir).unwrap_or_default();
@@ -78,6 +86,7 @@ impl AppState {
             config,
             data_dir,
             wiki,
+            runtime,
             cancel_token: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -122,6 +131,11 @@ fn register_capabilities(registry: &CapabilityRegistry) {
     registry.register(Capability::new(
         "thinking",
         "Use for internal reasoning and planning steps. Does not execute anything.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "checklist_write",
+        "Write or replace the current turn checklist for planning and progress tracking.",
         RiskLevel::ReadOnly,
     ));
     // wiki capabilities
@@ -176,6 +190,12 @@ fn get_policy_mode(state: tauri::State<AppState>) -> PolicyMode {
 }
 
 #[tauri::command]
+fn get_agent_mode(state: tauri::State<AppState>) -> Result<AgentMode, String> {
+    let config = state.config.read().map_err(|e| format!("Lock: {}", e))?;
+    Ok(config.agent_mode)
+}
+
+#[tauri::command]
 fn get_tasks(state: tauri::State<AppState>) -> Vec<Task> {
     state.tasks.list()
 }
@@ -214,6 +234,17 @@ async fn set_policy_mode(
     Ok(mode)
 }
 
+#[tauri::command]
+async fn set_agent_mode(
+    mode: AgentMode,
+    state: tauri::State<'_, AppState>,
+) -> Result<AgentMode, String> {
+    let mut config = state.config.write().map_err(|e| format!("Lock: {}", e))?;
+    config.agent_mode = mode;
+    config::save_config(&state.data_dir, &config)?;
+    Ok(mode)
+}
+
 // ── Tauri Commands: session ──────────────────────────────────────
 
 #[tauri::command]
@@ -245,6 +276,15 @@ async fn delete_session(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     state.session.delete_session(&session_id)
+        .and_then(|_| state.runtime.delete_thread(&session_id))
+}
+
+#[tauri::command]
+async fn load_runtime_thread(
+    session_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<RuntimeThreadView>, String> {
+    state.runtime.load_thread_view(&session_id)
 }
 
 // ── Tauri Commands: chat ─────────────────────────────────────────
@@ -266,11 +306,28 @@ async fn send_message(
     state.cancel_token.store(false, Ordering::SeqCst);
 
     let now = chrono_now();
+    let agent_mode = {
+        let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
+        cfg_guard.agent_mode
+    };
+    let turn = state.runtime.start_turn(&session_id, agent_mode, &content)?;
+    let _ = app_handle.emit(
+        "runtime-event",
+        serde_json::json!({
+            "kind": "turn.started",
+            "turnId": turn.id,
+            "sessionId": session_id,
+            "summary": "开始新回合",
+            "agentMode": agent_mode,
+            "timestamp": now,
+        }),
+    );
 
     // save user message
     let user_msg = SessionMessage {
         role: "user".into(),
         content: content.clone(),
+        reasoning_content: None,
         executions: None,
         task_id: None,
         timestamp: now,
@@ -288,20 +345,24 @@ async fn send_message(
         agent::agent_loop(
             &state,
             &session_id,
+            &turn.id,
             &content,
             &llm_config,
             Some(&app_handle),
         )
         .await
         .unwrap_or_else(|e| {
+            eprintln!("agent loop failed: {}", e);
             let friendly = format!(
-                "{}（endpoint: {}, model: {}）\n\n本地指令：`read <路径>` / `run <命令>`",
+                "{}\n\n详细信息：{}\nendpoint: {}\nmodel: {}\n\n本地指令：`read <路径>` / `run <命令>`",
                 e.user_friendly(),
+                e,
                 llm_config.endpoint,
                 llm_config.model,
             );
             agent::AgentResponse {
                 content: friendly,
+                reasoning_content: None,
                 executions: vec![],
                 task_id: None,
             }
@@ -322,6 +383,7 @@ async fn send_message(
             };
             agent::AgentResponse {
                 content: reply,
+                reasoning_content: None,
                 executions: vec![ExecutionRecord {
                     capability: "read".into(),
                     input: path.to_string(),
@@ -346,6 +408,7 @@ async fn send_message(
             };
             agent::AgentResponse {
                 content: reply,
+                reasoning_content: None,
                 executions: vec![ExecutionRecord {
                     capability: "bash".into(),
                     input: cmd.to_string(),
@@ -363,6 +426,7 @@ async fn send_message(
             );
             agent::AgentResponse {
                 content: reply,
+                reasoning_content: None,
                 executions: vec![],
                 task_id: None,
             }
@@ -371,6 +435,23 @@ async fn send_message(
 
     let agent_msg = agent::build_agent_message(&agent_response);
     state.session.append_message(&session_id, &agent_msg)?;
+    let completed_turn = state.runtime.finish_turn(
+        &session_id,
+        &turn.id,
+        &agent_response.content,
+        agent_response.executions.len(),
+    )?;
+    let _ = app_handle.emit(
+        "runtime-event",
+        serde_json::json!({
+            "kind": "turn.completed",
+            "turnId": completed_turn.id,
+            "sessionId": session_id,
+            "summary": format!("回合完成，执行 {} 个工具", completed_turn.execution_count),
+            "status": completed_turn.status,
+            "timestamp": completed_turn.finished_at,
+        }),
+    );
 
     Ok(agent_msg)
 }
@@ -656,16 +737,19 @@ pub fn run() {
             get_capabilities,
             get_actions,
             get_policy_mode,
+            get_agent_mode,
             get_tasks,
             get_audits,
             get_llm_providers,
             execute_capability,
             set_policy_mode,
+            set_agent_mode,
             cancel_agent,
             create_session,
             list_sessions,
             load_session,
             delete_session,
+            load_runtime_thread,
             send_message,
             get_config,
             save_config,

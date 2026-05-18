@@ -6,6 +6,8 @@ pub struct ChatMessage {
     pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -50,6 +52,7 @@ pub struct FunctionDef {
 pub struct ChatResponse {
     pub role: String,
     pub content: Option<String>,
+    pub reasoning_content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
 }
 
@@ -57,6 +60,7 @@ pub struct ChatResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatStreamChunk {
     pub content_delta: Option<String>,
+    pub reasoning_delta: Option<String>,
     pub tool_call_delta: Option<ToolCallDelta>,
     pub done: bool,
 }
@@ -74,6 +78,7 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -83,6 +88,7 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -92,6 +98,7 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -101,6 +108,7 @@ impl ChatMessage {
         Self {
             role: "tool".into(),
             content: content.into(),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
         }

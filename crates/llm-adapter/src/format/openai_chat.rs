@@ -42,16 +42,24 @@ pub fn build_request(
                         })
                     })
                     .collect();
-                json!({
+                let mut message = json!({
                     "role": "assistant",
                     "content": if m.content.is_empty() { None } else { Some(&m.content) },
                     "tool_calls": oai_tcs,
-                })
+                });
+                if m.reasoning_content.is_some() {
+                    message["reasoning_content"] = json!(m.reasoning_content);
+                }
+                message
             } else {
-                json!({
+                let mut message = json!({
                     "role": role,
                     "content": m.content,
-                })
+                });
+                if matches!(role, "assistant") && m.reasoning_content.is_some() {
+                    message["reasoning_content"] = json!(m.reasoning_content);
+                }
+                message
             }
         })
         .collect();
@@ -103,6 +111,11 @@ pub fn parse_response(data: &serde_json::Value) -> std::result::Result<ChatRespo
         serde_json::Value::String(s) if !s.is_empty() => Some(s.clone()),
         _ => None,
     });
+    let reasoning_content = msg
+        .get("reasoning_content")
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
 
     let tool_calls = msg.get("tool_calls").and_then(|tc| tc.as_array()).map(
         |tc_array| {
@@ -129,6 +142,7 @@ pub fn parse_response(data: &serde_json::Value) -> std::result::Result<ChatRespo
     Ok(ChatResponse {
         role,
         content,
+        reasoning_content,
         tool_calls: tool_calls.filter(|tc: &Vec<ToolCall>| !tc.is_empty()),
     })
 }
@@ -149,6 +163,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
     if json_str == "[DONE]" {
         return Ok(Some(ChatStreamChunk {
             content_delta: None,
+            reasoning_delta: None,
             tool_call_delta: None,
             done: true,
         }));
@@ -174,6 +189,12 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
 
     let content_delta = delta
         .get("content")
+        .and_then(|c| c.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let reasoning_delta = delta
+        .get("reasoning_content")
+        .or_else(|| delta.get("reasoning"))
         .and_then(|c| c.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
@@ -213,7 +234,74 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
 
     Ok(Some(ChatStreamChunk {
         content_delta,
+        reasoning_delta,
         tool_call_delta,
         done,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_request, parse_response, parse_stream_line};
+    use crate::types::{ChatMessage, ToolCall, ToolCallFunction};
+
+    #[test]
+    fn includes_reasoning_content_in_assistant_messages() {
+        let messages = vec![
+            ChatMessage {
+                role: "assistant".into(),
+                content: "done".into(),
+                reasoning_content: Some("chain".into()),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".into(),
+                content: String::new(),
+                reasoning_content: Some("call planning".into()),
+                tool_calls: Some(vec![ToolCall {
+                    id: "call_1".into(),
+                    call_type: "function".into(),
+                    function: ToolCallFunction {
+                        name: "read".into(),
+                        arguments: "{\"path\":\"/tmp/a\"}".into(),
+                    },
+                }]),
+                tool_call_id: None,
+            },
+        ];
+
+        let body = build_request("deepseek-v4-flash", &messages, &[], false);
+        let request_messages = body["messages"].as_array().unwrap();
+        assert_eq!(request_messages[0]["reasoning_content"], "chain");
+        assert_eq!(request_messages[1]["reasoning_content"], "call planning");
+    }
+
+    #[test]
+    fn parses_reasoning_content_from_response() {
+        let data = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "reasoning_content": "internal"
+                }
+            }]
+        });
+
+        let response = parse_response(&data).unwrap();
+        assert_eq!(response.reasoning_content.as_deref(), Some("internal"));
+    }
+
+    #[test]
+    fn parses_reasoning_delta_from_stream() {
+        let chunk = parse_stream_line(
+            r#"data: {"choices":[{"delta":{"reasoning_content":"step 1"},"finish_reason":null}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(chunk.reasoning_delta.as_deref(), Some("step 1"));
+        assert!(!chunk.done);
+    }
 }

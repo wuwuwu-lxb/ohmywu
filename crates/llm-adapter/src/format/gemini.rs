@@ -154,6 +154,7 @@ pub fn parse_response(data: &serde_json::Value) -> std::result::Result<ChatRespo
     Ok(ChatResponse {
         role: "assistant".to_string(),
         content: content_text,
+        reasoning_content: None,
         tool_calls: if tool_calls.is_empty() {
             None
         } else {
@@ -178,6 +179,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
     if json_str == "[DONE]" {
         return Ok(Some(ChatStreamChunk {
             content_delta: None,
+            reasoning_delta: None,
             tool_call_delta: None,
             done: true,
         }));
@@ -232,6 +234,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
 
     Ok(Some(ChatStreamChunk {
         content_delta,
+        reasoning_delta: None,
         tool_call_delta,
         done,
     }))

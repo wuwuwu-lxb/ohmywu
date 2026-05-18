@@ -49,6 +49,15 @@ pub enum PolicyMode {
     Danger,
 }
 
+/// Agent mode — determines how the runtime exposes and executes tools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentMode {
+    Plan,
+    Agent,
+    Auto,
+}
+
 /// A task — represents a tracked execution unit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {

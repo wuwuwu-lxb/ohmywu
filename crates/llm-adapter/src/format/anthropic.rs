@@ -143,6 +143,7 @@ pub fn parse_response(data: &serde_json::Value) -> std::result::Result<ChatRespo
     Ok(ChatResponse {
         role,
         content,
+        reasoning_content: None,
         tool_calls: tool_calls.filter(|tc| !tc.is_empty()),
     })
 }
@@ -160,6 +161,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
         if data_str == "[DONE]" {
             return Ok(Some(ChatStreamChunk {
                 content_delta: None,
+                reasoning_delta: None,
                 tool_call_delta: None,
                 done: true,
             }));
@@ -180,6 +182,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
                             .to_string();
                         Ok(Some(ChatStreamChunk {
                             content_delta: if text.is_empty() { None } else { Some(text) },
+                            reasoning_delta: None,
                             tool_call_delta: None,
                             done: false,
                         }))
@@ -195,6 +198,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
                             .unwrap_or(0) as usize;
                         Ok(Some(ChatStreamChunk {
                             content_delta: None,
+                            reasoning_delta: None,
                             tool_call_delta: Some(ToolCallDelta {
                                 index,
                                 id: None,
@@ -215,6 +219,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
                         let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
                         Ok(Some(ChatStreamChunk {
                             content_delta: None,
+                            reasoning_delta: None,
                             tool_call_delta: Some(ToolCallDelta {
                                 index: data
                                     .get("index")
@@ -232,6 +237,7 @@ pub fn parse_stream_line(line: &str) -> std::result::Result<Option<ChatStreamChu
             }
             Some("message_stop") => Ok(Some(ChatStreamChunk {
                 content_delta: None,
+                reasoning_delta: None,
                 tool_call_delta: None,
                 done: true,
             })),
@@ -260,6 +266,7 @@ fn parse_stream_line_from_message_start(
                     // Initial tool_use in message_start means the model is using a cached tool
                     return Ok(Some(ChatStreamChunk {
                         content_delta: None,
+                        reasoning_delta: None,
                         tool_call_delta: Some(ToolCallDelta {
                             index: 0,
                             id: Some(id.to_string()),

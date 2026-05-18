@@ -66,6 +66,26 @@ onMounted(async () => {
       <button class="session-btn" @click="newSession" title="新建对话">
         <span>+</span>
       </button>
+      <div class="mode-switch">
+        <button
+          v-for="mode in ['plan', 'agent', 'auto']"
+          :key="mode"
+          class="mode-chip"
+          :class="{ active: store.agentMode === mode }"
+          @click="store.setAgentMode(mode as 'plan' | 'agent' | 'auto')"
+        >
+          {{ mode }}
+        </button>
+      </div>
+    </div>
+
+    <div class="runtime-bar">
+      <span class="runtime-label">Runtime</span>
+      <span class="runtime-value">{{ store.runtimeStatus }}</span>
+      <span v-if="store.runtimeTurns.length" class="runtime-meta">
+        {{ store.runtimeTurns[store.runtimeTurns.length - 1].status }} ·
+        {{ store.runtimeTurns[store.runtimeTurns.length - 1].executionCount }} tools
+      </span>
     </div>
 
     <!-- messages area -->
@@ -255,6 +275,65 @@ onMounted(async () => {
   background: rgba(var(--accent-rgb), 0.08);
   color: var(--text-primary);
   border-color: rgba(var(--accent-rgb), 0.18);
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mode-chip {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.mode-chip:hover {
+  color: var(--text-primary);
+  background: var(--surface-2);
+}
+
+.mode-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--active-bg);
+}
+
+.runtime-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--surface-1);
+  flex-shrink: 0;
+}
+
+.runtime-label {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-tertiary);
+}
+
+.runtime-value {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.runtime-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 /* ── Messages Area ────────────────────────────────────────────── */

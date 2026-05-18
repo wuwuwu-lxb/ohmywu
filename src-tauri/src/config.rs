@@ -1,4 +1,4 @@
-use ohmywu_domain::PolicyMode;
+use ohmywu_domain::{AgentMode, PolicyMode};
 use ohmywu_llm_adapter::LlmConfig;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -35,6 +35,8 @@ pub struct AppConfig {
     pub background_auto_theme: bool,
     #[serde(default)]
     pub background_theme_color: Option<String>,
+    #[serde(default = "default_agent_mode")]
+    pub agent_mode: AgentMode,
     #[serde(default)]
     pub llm_provider: Option<LlmConfig>,
     #[serde(default)]
@@ -71,6 +73,9 @@ fn default_bg_mask() -> u8 {
 fn default_background_auto_theme() -> bool {
     true
 }
+fn default_agent_mode() -> AgentMode {
+    AgentMode::Agent
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -86,6 +91,7 @@ impl Default for AppConfig {
             background_mask_opacity: default_bg_mask(),
             background_auto_theme: default_background_auto_theme(),
             background_theme_color: None,
+            agent_mode: default_agent_mode(),
             llm_provider: None,
             permissions: PermissionConfig::default(),
         }

@@ -1,4 +1,5 @@
 pub mod bash;
+pub mod checklist;
 pub mod edit;
 pub mod glob;
 pub mod grep;
@@ -13,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 
-use ohmywu_domain::RiskLevel;
+use ohmywu_domain::{AgentMode, RiskLevel};
 
 use crate::AppState;
 
@@ -84,8 +85,14 @@ use ohmywu_llm_adapter::types::{FunctionDef, ToolDef};
 /// Generate LLM tool definitions from all registered capabilities.
 pub fn active_tool_defs(state: &AppState) -> Vec<ToolDef> {
     let caps = state.capabilities.list();
+    let agent_mode = state
+        .config
+        .read()
+        .map(|cfg| cfg.agent_mode)
+        .unwrap_or(AgentMode::Agent);
     let mut tools: Vec<ToolDef> = caps
         .iter()
+        .filter(|cap| tool_visible_in_mode(&cap.name, cap.risk_level, agent_mode))
         .filter_map(|cap| {
             let params = tool_params(&cap.name)?;
             Some(ToolDef {
@@ -226,6 +233,21 @@ pub fn tool_params(name: &str) -> Option<serde_json::Value> {
             },
             "required": ["thought"]
         })),
+        "checklist_write" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Optional checklist title"
+                },
+                "items": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Ordered task items for the current turn"
+                }
+            },
+            "required": ["items"]
+        })),
         "wiki_read" => Some(serde_json::json!({
             "type": "object",
             "properties": {
@@ -289,6 +311,23 @@ pub async fn dispatch_tool(
         }
     };
 
+    let agent_mode = state
+        .config
+        .read()
+        .map(|cfg| cfg.agent_mode)
+        .unwrap_or(AgentMode::Agent);
+    if !tool_allowed_in_mode(&cap_name, cap.risk_level, agent_mode) {
+        return ExecuteResult {
+            capability: cap_name,
+            status: "denied".into(),
+            output: None,
+            error: Some(format!("Tool is disabled in {:?} mode", agent_mode)),
+            task_id: String::new(),
+            duration_ms: 0,
+            policy_decision: "denied".into(),
+        };
+    }
+
     // 2. policy gate
     let decision = state.policy.check(cap.risk_level);
     if !decision.allowed {
@@ -319,6 +358,7 @@ pub async fn dispatch_tool(
             &cap_name,
             &params,
             Some(ToolKind::from_risk(cap.risk_level)),
+            agent_mode,
         )
     };
 
@@ -368,6 +408,8 @@ pub async fn dispatch_tool(
     let exec_result: Result<ExecOutput, String> = if cap_name == "thinking" {
         // thinking is instant, no blocking needed
         thinking::execute(&params)
+    } else if cap_name == "checklist_write" {
+        checklist::write(&params, &state.runtime)
     } else if cap_name.starts_with("wiki_") {
         // wiki tools: read/write/search/list/graph — fast file I/O
         let wiki_lock = state.wiki.read().unwrap();
@@ -382,7 +424,7 @@ pub async fn dispatch_tool(
     } else {
         let cap_name_clone = cap_name.clone();
         let params_clone = params.clone();
-        let future = task::spawn_blocking(move || {
+        let future = task::spawn_blocking(move || -> Result<ExecOutput, String> {
             match cap_name_clone.as_str() {
                 "bash" => bash::execute(&params_clone),
                 "read" => read::execute(&params_clone),
@@ -391,6 +433,7 @@ pub async fn dispatch_tool(
                 "glob" => glob::execute(&params_clone),
                 "grep" => grep::execute(&params_clone),
                 "web_fetch" => web_fetch::execute(&params_clone),
+                "checklist_write" => Err("checklist_write should execute inline".into()),
                 other => Err(format!("Unknown capability: {}", other)),
             }
         });
@@ -479,7 +522,32 @@ fn describe_target(cap: &str, params: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("(no path)")
             .to_string(),
+        "checklist_write" => params
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("current checklist")
+            .to_string(),
         _ => format!("{:?}", params),
+    }
+}
+
+fn tool_visible_in_mode(name: &str, risk: RiskLevel, mode: AgentMode) -> bool {
+    if name == "checklist_write" {
+        return true;
+    }
+    match mode {
+        AgentMode::Plan => matches!(risk, RiskLevel::ReadOnly),
+        AgentMode::Agent | AgentMode::Auto => true,
+    }
+}
+
+fn tool_allowed_in_mode(name: &str, risk: RiskLevel, mode: AgentMode) -> bool {
+    if name == "checklist_write" {
+        return true;
+    }
+    match mode {
+        AgentMode::Plan => matches!(risk, RiskLevel::ReadOnly),
+        AgentMode::Agent | AgentMode::Auto => true,
     }
 }
 

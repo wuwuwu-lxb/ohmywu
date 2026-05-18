@@ -3,8 +3,7 @@ use std::sync::atomic::Ordering;
 
 use futures::FutureExt;
 
-use ohmywu_domain::chrono_now;
-use ohmywu_domain::RiskLevel;
+use ohmywu_domain::{chrono_now, AgentMode, RiskLevel};
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
@@ -26,6 +25,7 @@ const SYSTEM_PROMPT: &str = "\
 - `grep` — 搜索文件内容
 - `web_fetch` — 获取 URL 内容
 - `thinking` — 内部推理和规划
+- `checklist_write` — 写入当前回合的执行清单
 
 ## 权限规则
 
@@ -48,6 +48,7 @@ const MAX_ITERATIONS: usize = 10;
 
 pub struct AgentResponse {
     pub content: String,
+    pub reasoning_content: Option<String>,
     pub executions: Vec<ExecutionRecord>,
     pub task_id: Option<String>,
 }
@@ -57,6 +58,7 @@ pub struct AgentResponse {
 pub async fn agent_loop(
     state: &AppState,
     session_id: &str,
+    turn_id: &str,
     user_message: &str,
     llm_config: &LlmConfig,
     app_handle: Option<&tauri::AppHandle>,
@@ -66,21 +68,16 @@ pub async fn agent_loop(
     // Step 1: Health check — fast fail if unreachable
     provider.health_check().await?;
 
-    // Step 2: Probe capabilities — detect whether tools/streaming are supported
-    let caps = provider.probe_capabilities().await;
-    let tools = if caps.supports_streaming_with_tools {
-        active_tool_defs(state)
-    } else {
-        // Model doesn't support tools (e.g. DeepSeek), fall back to pure text
-        vec![]
-    };
+    // Step 2: Build the active toolset directly.
+    // Claude Code style: prefer a single real execution path over pre-probe gating.
+    let tools = active_tool_defs(state);
 
     let mut executions: Vec<ExecutionRecord> = Vec::new();
     let mut last_task_id: Option<String> = None;
 
     // build initial messages
     let mut messages: Vec<ChatMessage> = Vec::new();
-    messages.push(ChatMessage::system(SYSTEM_PROMPT));
+    messages.push(ChatMessage::system(&build_system_prompt(state)));
 
     // include recent session history (last 20 messages)
     let history = state.session.load_session(session_id).unwrap_or_default();
@@ -88,6 +85,7 @@ pub async fn agent_loop(
         messages.push(ChatMessage {
             role: msg.role.clone(),
             content: msg.content.clone(),
+            reasoning_content: msg.reasoning_content.clone(),
             tool_calls: None,
             tool_call_id: None,
         });
@@ -102,17 +100,25 @@ pub async fn agent_loop(
         if state.cancel_token.load(Ordering::SeqCst) {
             return Ok(AgentResponse {
                 content: "操作已中断。".into(),
+                reasoning_content: None,
                 executions,
                 task_id: last_task_id,
             });
         }
 
-        let (response, mut early_cache) = if let Some(handle) = app_handle {
-            // streaming mode: collect all content and tool calls
-            chat_with_streaming(provider.as_ref(), &messages, &tools, handle, state).await?
-        } else {
-            let resp = provider.chat(&messages, &tools).await?;
-            (resp, HashMap::new())
+        let (response, mut early_cache) = match chat_once(
+            provider.as_ref(),
+            &messages,
+            &tools,
+            app_handle,
+            state,
+        ).await {
+            Ok(ok) => ok,
+            Err(LlmError::Incompatible(_)) if !tools.is_empty() => {
+                // Retry once in plain-text mode only after a real tool request fails.
+                chat_once(provider.as_ref(), &messages, &[], app_handle, state).await?
+            }
+            Err(err) => return Err(err),
         };
 
         // If the assistant responds with content only (no tool calls), return it
@@ -120,6 +126,7 @@ pub async fn agent_loop(
             let content = response.content.unwrap_or_default();
             return Ok(AgentResponse {
                 content,
+                reasoning_content: response.reasoning_content,
                 executions,
                 task_id: last_task_id,
             });
@@ -133,6 +140,7 @@ pub async fn agent_loop(
         messages.push(ChatMessage {
             role: "assistant".into(),
             content: assistant_content,
+            reasoning_content: response.reasoning_content.clone(),
             tool_calls: Some(tool_calls.clone()),
             tool_call_id: None,
         });
@@ -149,6 +157,7 @@ pub async fn agent_loop(
 
             let params: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or(serde_json::Value::Null);
+            let params = augment_tool_params(&tc.function.name, params, session_id, turn_id);
 
             // Tool name = capability name. Unknown tools fall back to bash.
             let capability = if state.capabilities.contains(&tc.function.name) {
@@ -209,15 +218,87 @@ pub async fn agent_loop(
             };
 
             messages.push(ChatMessage::tool(&tool_result, tc_id));
+
+            if let Some(handle) = app_handle {
+                let _ = state.runtime.append_tool_event(session_id, turn_id, capability, &result.status);
+                let _ = handle.emit(
+                    "runtime-event",
+                    serde_json::json!({
+                        "kind": "tool.completed",
+                        "turnId": turn_id,
+                        "sessionId": session_id,
+                        "summary": format!("{} -> {}", capability, result.status),
+                        "capability": capability,
+                        "status": result.status,
+                        "timestamp": chrono_now(),
+                    }),
+                );
+            }
         }
     }
 
     // Max iterations reached — return whatever we have
     Ok(AgentResponse {
         content: "已执行操作，但达到最大推理轮次。".into(),
+        reasoning_content: None,
         executions,
         task_id: last_task_id,
     })
+}
+
+async fn chat_once(
+    provider: &dyn LlmProvider,
+    messages: &[ChatMessage],
+    tools: &[ohmywu_llm_adapter::types::ToolDef],
+    app_handle: Option<&tauri::AppHandle>,
+    state: &AppState,
+) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
+    if let Some(handle) = app_handle {
+        match chat_with_streaming(provider, messages, tools, handle, state).await {
+            Ok(ok) => Ok(ok),
+            Err(LlmError::Incompatible(_)) => Err(LlmError::Incompatible(
+                "streaming tools incompatible".into(),
+            )),
+            Err(_) if !tools.is_empty() => {
+                let resp = provider.chat(messages, tools).await?;
+                Ok((resp, HashMap::new()))
+            }
+            Err(err) => Err(err),
+        }
+    } else {
+        let resp = provider.chat(messages, tools).await?;
+        Ok((resp, HashMap::new()))
+    }
+}
+
+fn build_system_prompt(state: &AppState) -> String {
+    let agent_mode = state
+        .config
+        .read()
+        .map(|cfg| cfg.agent_mode)
+        .unwrap_or(AgentMode::Agent);
+    let mode_note = match agent_mode {
+        AgentMode::Plan => "当前模式：plan。优先调查、阅读、写 checklist。不要尝试写文件或执行 shell。",
+        AgentMode::Agent => "当前模式：agent。你可以分步执行，但高风险 shell 操作需要先征得用户确认。",
+        AgentMode::Auto => "当前模式：auto。你可以连续执行任务，但仍应保持说明清晰、避免不必要的高风险操作。",
+    };
+    format!("{}\n\n{}", SYSTEM_PROMPT, mode_note)
+}
+
+fn augment_tool_params(
+    tool_name: &str,
+    mut params: serde_json::Value,
+    session_id: &str,
+    turn_id: &str,
+) -> serde_json::Value {
+    if tool_name != "checklist_write" {
+        return params;
+    }
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert("session_id".into(), serde_json::Value::String(session_id.to_string()));
+        obj.insert("turn_id".into(), serde_json::Value::String(turn_id.to_string()));
+    }
+    params
 }
 
 /// Streaming chat: emit chunks via Tauri events, execute read-only tools during streaming.
@@ -231,12 +312,13 @@ async fn chat_with_streaming(
     state: &AppState,
 ) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
     use futures::StreamExt;
-    use std::collections::HashSet;
+    use std::collections::{HashMap as StdHashMap, HashSet};
 
     let mut stream = provider.chat_stream(messages, tools).await?;
     let mut full_content = String::new();
-    let mut full_tool_calls: Vec<ToolCall> = Vec::new();
-    let mut seen_tool_ids: HashSet<String> = HashSet::new();
+    let mut full_reasoning = String::new();
+    let mut tool_call_parts: StdHashMap<usize, ToolCall> = StdHashMap::new();
+    let mut early_started: HashSet<String> = HashSet::new();
 
     // Track early-executed tool calls spawned during streaming
     let mut early_handles: Vec<(String, tokio::task::JoinHandle<tools::ExecuteResult>)> = Vec::new();
@@ -247,44 +329,55 @@ async fn chat_with_streaming(
                 if let Some(delta) = &c.content_delta {
                     full_content.push_str(delta);
                 }
+                if let Some(delta) = &c.reasoning_delta {
+                    full_reasoning.push_str(delta);
+                }
 
                 // Accumulate tool call deltas — dedup by ID
-                if let Some(ref delta) = c.tool_call_delta
-                    && let Some(ref args) = delta.arguments_delta
-                    && let Ok(tcs) = serde_json::from_str::<Vec<ToolCall>>(args)
-                {
-                    for tc in &tcs {
-                        if seen_tool_ids.insert(tc.id.clone()) {
-                            full_tool_calls.push(tc.clone());
+                if let Some(ref delta) = c.tool_call_delta {
+                    let entry = tool_call_parts.entry(delta.index).or_insert_with(|| ToolCall {
+                        id: delta.id.clone().unwrap_or_else(|| format!("tool_{}", delta.index)),
+                        call_type: "function".into(),
+                        function: ohmywu_llm_adapter::types::ToolCallFunction {
+                            name: delta.name.clone().unwrap_or_default(),
+                            arguments: String::new(),
+                        },
+                    });
 
-                            // Only early-execute if arguments are complete JSON
-                            if let Ok(params) =
-                                serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
-                            {
-                                // Only read-only tools are safe to execute early
-                                let is_readonly = state
-                                    .capabilities
-                                    .get(&tc.function.name)
-                                    .map(|c| matches!(c.risk_level, RiskLevel::ReadOnly))
-                                    .unwrap_or(false);
+                    if let Some(id) = &delta.id {
+                        entry.id = id.clone();
+                    }
+                    if let Some(name) = &delta.name {
+                        entry.function.name = name.clone();
+                    }
+                    if let Some(arguments_delta) = &delta.arguments_delta {
+                        entry.function.arguments.push_str(arguments_delta);
+                    }
 
-                                if is_readonly {
-                                    let state_clone = state.clone();
-                                    let cap_name = tc.function.name.clone();
-                                    let tc_id = tc.id.clone();
-                                    let handle = tokio::spawn(async move {
-                                        tools::dispatch_tool(
-                                            &state_clone,
-                                            ExecuteRequest {
-                                                capability: cap_name,
-                                                params,
-                                            },
-                                        )
-                                        .await
-                                    });
-                                    early_handles.push((tc_id, handle));
-                                }
-                            }
+                    if !entry.function.name.is_empty()
+                        && let Ok(params) = serde_json::from_str::<serde_json::Value>(&entry.function.arguments)
+                    {
+                        let is_readonly = state
+                            .capabilities
+                            .get(&entry.function.name)
+                            .map(|c| matches!(c.risk_level, RiskLevel::ReadOnly))
+                            .unwrap_or(false);
+
+                        if is_readonly && early_started.insert(entry.id.clone()) {
+                            let state_clone = state.clone();
+                            let cap_name = entry.function.name.clone();
+                            let tc_id = entry.id.clone();
+                            let handle = tokio::spawn(async move {
+                                tools::dispatch_tool(
+                                    &state_clone,
+                                    ExecuteRequest {
+                                        capability: cap_name,
+                                        params,
+                                    },
+                                )
+                                .await
+                            });
+                            early_handles.push((tc_id, handle));
                         }
                     }
                 }
@@ -301,6 +394,7 @@ async fn chat_with_streaming(
                     "chat-stream",
                     &ChatStreamChunk {
                         content_delta: Some(format!("\n[错误: {}]", e)),
+                        reasoning_delta: None,
                         tool_call_delta: None,
                         done: true,
                     },
@@ -318,6 +412,14 @@ async fn chat_with_streaming(
         }
     }
 
+    let mut ordered_parts: Vec<(usize, ToolCall)> = tool_call_parts.into_iter().collect();
+    ordered_parts.sort_by_key(|(index, _)| *index);
+    let full_tool_calls: Vec<ToolCall> = ordered_parts
+        .into_iter()
+        .map(|(_, tc)| tc)
+        .filter(|tc| !tc.function.name.is_empty())
+        .collect();
+
     Ok((
         ChatResponse {
             role: "assistant".into(),
@@ -325,6 +427,11 @@ async fn chat_with_streaming(
                 None
             } else {
                 Some(full_content)
+            },
+            reasoning_content: if full_reasoning.is_empty() {
+                None
+            } else {
+                Some(full_reasoning)
             },
             tool_calls: if full_tool_calls.is_empty() {
                 None
@@ -343,6 +450,7 @@ pub fn build_agent_message(
     SessionMessage {
         role: "agent".into(),
         content: response.content.clone(),
+        reasoning_content: response.reasoning_content.clone(),
         executions: if response.executions.is_empty() {
             None
         } else {
