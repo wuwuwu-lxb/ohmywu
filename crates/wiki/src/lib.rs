@@ -1,0 +1,661 @@
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+
+// ── Types ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteMeta {
+    pub slug: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub created: String,
+    pub updated: String,
+    pub links_to: Vec<String>,
+    pub linked_from: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WikiNote {
+    pub slug: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub created: String,
+    pub updated: String,
+    pub body: String,
+    #[serde(skip)]
+    pub file_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphData {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: String,
+    pub label: String,
+    pub tags: Vec<String>,
+    pub link_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub source: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexEntry {
+    pub slug: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub updated: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct Frontmatter {
+    title: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    created: Option<String>,
+    #[serde(default)]
+    updated: Option<String>,
+}
+
+// ── Engine ─────────────────────────────────────────────────────────
+
+#[derive(Clone)]
+pub struct WikiEngine {
+    root: PathBuf,
+}
+
+impl WikiEngine {
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    pub fn init(&self) -> Result<(), String> {
+        let dirs = ["concepts", "notes", "daily", "profile"];
+        for d in &dirs {
+            let path = self.root.join(d);
+            fs::create_dir_all(&path)
+                .map_err(|e| format!("create dir {:?}: {}", path, e))?;
+        }
+
+        let readme = self.root.join("README.md");
+        if !readme.exists() {
+            let content = r#"# OhMyWu Wiki
+
+你的个人知识库，由 AI 助手维护。
+
+## 目录
+
+- **[概念](./concepts/)** — 技术概念、框架、方法论
+- **[笔记](./notes/)** — 自由笔记
+- **[每日](./daily/)** — 每日学习记录
+- **[画像](./profile/)** — 用户画像与学习轨迹
+"#;
+            fs::write(&readme, content)
+                .map_err(|e| format!("write README.md: {}", e))?;
+        }
+
+        // ensure index.md
+        self.rebuild_index()?;
+
+        Ok(())
+    }
+
+    // ── CRUD ──────────────────────────────────────────────────────
+
+    pub fn list_notes(&self) -> Result<Vec<NoteMeta>, String> {
+        let mut notes = Vec::new();
+        self.walk_md_files(&self.root.clone(), &mut |path| {
+            if let Ok(note) = self.read_note_file(path) {
+                let backlinks = self.find_backlinks(&note.slug);
+                notes.push(NoteMeta {
+                    slug: note.slug,
+                    title: note.title,
+                    tags: note.tags,
+                    created: note.created,
+                    updated: note.updated,
+                    links_to: extract_links(&note.body),
+                    linked_from: backlinks,
+                });
+            }
+        })?;
+        // sort by updated desc
+        notes.sort_by(|a, b| b.updated.cmp(&a.updated));
+        Ok(notes)
+    }
+
+    pub fn read_note(&self, slug: &str) -> Result<WikiNote, String> {
+        let path = self.find_by_slug(slug)?;
+        let mut note = self.read_note_file(&path)?;
+        note.file_path = path;
+        Ok(note)
+    }
+
+    pub fn write_note(
+        &self,
+        slug: &str,
+        title: &str,
+        body: &str,
+        tags: &[String],
+        folder: &str,
+    ) -> Result<WikiNote, String> {
+        let slug = slugify(slug);
+        let dir = if folder.is_empty() { "notes" } else { folder };
+        let path = self.root.join(dir).join(format!("{}.md", &slug));
+
+        // determine created timestamp
+        let created = if path.exists() {
+            // preserve existing
+            match self.read_note_file(&path) {
+                Ok(existing) => existing.created,
+                Err(_) => ohmywu_domain::chrono_now(),
+            }
+        } else {
+            ohmywu_domain::chrono_now()
+        };
+        let updated = ohmywu_domain::chrono_now();
+
+        let mut file = fs::File::create(&path)
+            .map_err(|e| format!("create {:?}: {}", path, e))?;
+        write_frontmatter(
+            &mut file,
+            &Frontmatter {
+                title: title.to_string(),
+                tags: tags.to_vec(),
+                created: Some(created.clone()),
+                updated: Some(updated.clone()),
+            },
+        )?;
+        write!(file, "\n{}", body).map_err(|e| format!("write body: {}", e))?;
+
+        self.rebuild_index()?;
+
+        Ok(WikiNote {
+            slug,
+            title: title.to_string(),
+            tags: tags.to_vec(),
+            created,
+            updated,
+            body: body.to_string(),
+            file_path: path,
+        })
+    }
+
+    pub fn delete_note(&self, slug: &str) -> Result<(), String> {
+        let path = self.find_by_slug(slug)?;
+        // safety: only delete .md files inside the wiki root
+        if !path.starts_with(&self.root) || path.extension().is_none_or(|e| e != "md") {
+            return Err(format!("refusing to delete outside wiki: {:?}", path));
+        }
+        fs::remove_file(&path).map_err(|e| format!("delete {:?}: {}", path, e))?;
+        self.rebuild_index()?;
+        Ok(())
+    }
+
+    // ── Search ────────────────────────────────────────────────────
+
+    pub fn search(&self, query: &str) -> Result<Vec<NoteMeta>, String> {
+        let q_lower = query.to_lowercase();
+        let mut results: Vec<(NoteMeta, usize)> = Vec::new();
+
+        self.walk_md_files(&self.root.clone(), &mut |path| {
+            if let Ok(note) = self.read_note_file(path) {
+                let mut score = 0usize;
+                let title_lower = note.title.to_lowercase();
+                let body_lower = note.body.to_lowercase();
+
+                // title match = high score
+                if title_lower.contains(&q_lower) {
+                    score += 100;
+                    // exact title match bonus
+                    if title_lower == q_lower {
+                        score += 50;
+                    }
+                }
+                // tag match
+                for tag in &note.tags {
+                    if tag.to_lowercase().contains(&q_lower) {
+                        score += 30;
+                    }
+                }
+                // body match
+                score += body_lower.matches(&q_lower).count() * 2;
+
+                if score > 0 {
+                    let backlinks = self.find_backlinks(&note.slug);
+                    results.push((
+                        NoteMeta {
+                            slug: note.slug,
+                            title: note.title,
+                            tags: note.tags,
+                            created: note.created,
+                            updated: note.updated,
+                            links_to: extract_links(&note.body),
+                            linked_from: backlinks,
+                        },
+                        score,
+                    ));
+                }
+            }
+        })?;
+
+        results.sort_by_key(|b| std::cmp::Reverse(b.1));
+        Ok(results.into_iter().map(|(m, _)| m).collect())
+    }
+
+    // ── Graph ─────────────────────────────────────────────────────
+
+    pub fn build_graph(&self) -> Result<GraphData, String> {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+        let mut seen_nodes: HashSet<String> = HashSet::new();
+        let mut seen_edges: HashSet<(String, String)> = HashSet::new();
+
+        // collect all notes
+        let notes = self.list_notes()?;
+        let note_map: HashMap<String, NoteMeta> = notes
+            .into_iter()
+            .map(|n| (n.slug.clone(), n))
+            .collect();
+
+        for (slug, meta) in &note_map {
+            if seen_nodes.insert(slug.clone()) {
+                nodes.push(GraphNode {
+                    id: slug.clone(),
+                    label: meta.title.clone(),
+                    tags: meta.tags.clone(),
+                    link_count: meta.links_to.len() + meta.linked_from.len(),
+                });
+            }
+
+            for target in &meta.links_to {
+                let key = (slug.clone(), target.clone());
+                if seen_edges.insert(key) {
+                    edges.push(GraphEdge {
+                        source: slug.clone(),
+                        target: target.clone(),
+                    });
+                }
+                // ensure target node exists even if not a real page yet
+                if !note_map.contains_key(target) && seen_nodes.insert(target.clone()) {
+                    nodes.push(GraphNode {
+                        id: target.clone(),
+                        label: target.clone(),
+                        tags: vec![],
+                        link_count: 0,
+                    });
+                }
+            }
+        }
+
+        Ok(GraphData { nodes, edges })
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────
+
+    fn read_note_file(&self, path: &Path) -> Result<WikiNote, String> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("read {:?}: {}", path, e))?;
+
+        let (fm, body) = parse_frontmatter(&content)?;
+
+        let slug = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        Ok(WikiNote {
+            slug,
+            title: fm.title,
+            tags: fm.tags,
+            created: fm.created.unwrap_or_else(ohmywu_domain::chrono_now),
+            updated: fm.updated.unwrap_or_else(ohmywu_domain::chrono_now),
+            body: body.to_string(),
+            file_path: path.to_path_buf(),
+        })
+    }
+
+    fn find_by_slug(&self, slug: &str) -> Result<PathBuf, String> {
+        let mut found: Option<PathBuf> = None;
+        self.walk_md_files(&self.root.clone(), &mut |path| {
+            if found.is_some() {
+                return;
+            }
+            if path.file_stem().and_then(|s| s.to_str()) == Some(slug) {
+                found = Some(path.to_path_buf());
+            }
+        })?;
+        found.ok_or_else(|| format!("note '{}' not found", slug))
+    }
+
+    fn find_backlinks(&self, target_slug: &str) -> Vec<String> {
+        let mut backlinks = Vec::new();
+        let _ = self.walk_md_files(&self.root.clone(), &mut |path| {
+            if let Ok(content) = fs::read_to_string(path) {
+                let (_, body) = parse_frontmatter(&content).unwrap_or_default();
+                let links = extract_links(&body);
+                if links.contains(&target_slug.to_string())
+                    && let Some(slug) = path.file_stem().and_then(|s| s.to_str())
+                    && slug != target_slug
+                {
+                    backlinks.push(slug.to_string());
+                }
+            }
+        });
+        backlinks.sort();
+        backlinks.dedup();
+        backlinks
+    }
+
+    fn walk_md_files(
+        &self,
+        dir: &PathBuf,
+        cb: &mut dyn FnMut(&Path),
+    ) -> Result<(), String> {
+        if !dir.exists() {
+            return Ok(());
+        }
+        let entries = fs::read_dir(dir).map_err(|e| format!("read_dir {:?}: {}", dir, e))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("entry: {}", e))?;
+            let path = entry.path();
+            if path.is_dir() {
+                // skip .obsidian config dir
+                if path.file_name().is_some_and(|n| n == ".obsidian") {
+                    continue;
+                }
+                self.walk_md_files(&path, cb)?;
+            } else if path.extension().is_some_and(|e| e == "md") {
+                // skip index / readme for listing purposes
+                let is_meta = path
+                    .file_name()
+                    .is_some_and(|n| n == "index.md" || n == "README.md");
+                if !is_meta {
+                    cb(&path);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_index(&self) -> Result<(), String> {
+        let notes = {
+            let mut notes = Vec::new();
+            self.walk_md_files(&self.root.clone(), &mut |path| {
+                if let Ok(note) = self.read_note_file(path) {
+                    notes.push(IndexEntry {
+                        slug: note.slug,
+                        title: note.title,
+                        tags: note.tags,
+                        updated: note.updated,
+                    });
+                }
+            })?;
+            notes.sort_by(|a, b| b.updated.cmp(&a.updated));
+            notes
+        };
+
+        let mut index = String::from("# 知识库索引\n\n");
+        for entry in &notes {
+            index.push_str(&format!(
+                "- [{}]({})\n  - 标签: {}\n  - 更新: {}\n\n",
+                entry.title,
+                entry.slug,
+                entry.tags.join(", "),
+                entry.updated,
+            ));
+        }
+
+        let path = self.root.join("index.md");
+        fs::write(&path, index).map_err(|e| format!("write index.md: {}", e))?;
+        Ok(())
+    }
+}
+
+// ── Frontmatter parsing ────────────────────────────────────────────
+
+fn parse_frontmatter(content: &str) -> Result<(Frontmatter, String), String> {
+    let content = content.trim();
+    if !content.starts_with("---") {
+        return Ok((
+            Frontmatter {
+                title: "Untitled".into(),
+                tags: vec![],
+                created: None,
+                updated: None,
+            },
+            content.to_string(),
+        ));
+    }
+
+    let rest = &content[3..]; // skip first ---
+    let end = rest.find("---").unwrap_or(0);
+    let fm_str = &rest[..end].trim();
+    let body = rest[end + 3..].trim().to_string();
+
+    let fm: Frontmatter = serde_yaml::from_str(fm_str)
+        .map_err(|e| format!("parse frontmatter: {}", e))?;
+
+    Ok((fm, body))
+}
+
+fn write_frontmatter(file: &mut fs::File, fm: &Frontmatter) -> Result<(), String> {
+    let yaml = serde_yaml::to_string(fm)
+        .map_err(|e| format!("serialize frontmatter: {}", e))?;
+    write!(file, "---\n{}---\n", yaml).map_err(|e| format!("write fm: {}", e))?;
+    Ok(())
+}
+
+// ── Wiki link parsing ──────────────────────────────────────────────
+
+/// Extract linked slugs from markdown body.
+/// Supports `[[slug]]` and `[[slug|text]]`.
+pub fn extract_links(body: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    let mut i = 0;
+    let chars: Vec<char> = body.chars().collect();
+    while i < chars.len().saturating_sub(1) {
+        if chars[i] == '[' && chars[i + 1] == '[' {
+            let start = i + 2;
+            if let Some(end) = chars[start..].iter().position(|&c| c == ']')
+                && chars.get(start + end + 1) == Some(&']')
+            {
+                let inner: String = chars[start..start + end].iter().collect();
+                let slug = inner.split('|').next().unwrap_or(&inner);
+                links.push(slug.trim().to_string());
+                i = start + end + 2;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    links.sort();
+    links.dedup();
+    links
+}
+
+// ── Utilities ──────────────────────────────────────────────────────
+
+/// Convert a title/name into a file-system-safe slug.
+fn slugify(input: &str) -> String {
+    input
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+        .chars()
+        .take(80)
+        .collect()
+}
+
+impl Default for WikiEngine {
+    fn default() -> Self {
+        Self::new(PathBuf::from("wiki"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_slugify() {
+        assert_eq!(slugify("Hello World"), "hello-world");
+        assert_eq!(slugify("Rust 生命週期"), "rust-生命週期");
+        assert_eq!(slugify("async/await"), "async-await");
+    }
+
+    #[test]
+    fn test_parse_frontmatter() {
+        let content = r#"---
+title: "Test Note"
+tags: [rust, memory]
+created: "2026-05-14T10:00:00Z"
+---
+
+This is the body.
+
+With multiple lines.
+"#;
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.title, "Test Note");
+        assert_eq!(fm.tags, vec!["rust", "memory"]);
+        assert_eq!(fm.created.unwrap(), "2026-05-14T10:00:00Z");
+        assert!(body.starts_with("This is the body"));
+    }
+
+    #[test]
+    fn test_parse_frontmatter_no_fm() {
+        let content = "Just a plain note.";
+        let (fm, body) = parse_frontmatter(content).unwrap();
+        assert_eq!(fm.title, "Untitled");
+        assert_eq!(body, "Just a plain note.");
+    }
+
+    #[test]
+    fn test_extract_links() {
+        let body = "See also [[rust-lifetimes]] and [[ownership]].\n\nRelated: [[rust-lifetimes|Rust lifetimes]].";
+        let links = extract_links(body);
+        assert!(links.contains(&"rust-lifetimes".to_string()));
+        assert!(links.contains(&"ownership".to_string()));
+    }
+
+    #[test]
+    fn test_extract_links_no_links() {
+        let body = "No wikilinks here.";
+        let links = extract_links(body);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn test_write_and_read_and_search() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = WikiEngine::new(tmp.path().to_path_buf());
+        engine.init().unwrap();
+
+        // write a note
+        let note = engine
+            .write_note(
+                "rust-ownership",
+                "Rust 所有权",
+                "所有权是 Rust 的核心概念。参见 [[borrowing]]。",
+                &["rust".into(), "concept".into()],
+                "concepts",
+            )
+            .unwrap();
+        assert_eq!(note.slug, "rust-ownership");
+        assert_eq!(note.title, "Rust 所有权");
+
+        // write another
+        engine
+            .write_note(
+                "borrowing",
+                "借用",
+                "借用允许在不转移所有权的情况下使用值。参见 [[rust-ownership]]。",
+                &["rust".into(), "concept".into()],
+                "concepts",
+            )
+            .unwrap();
+
+        // read
+        let note = engine.read_note("rust-ownership").unwrap();
+        assert!(note.body.contains("所有权"));
+
+        // backlinks
+        let metas = engine.list_notes().unwrap();
+        let owner_meta = metas.iter().find(|m| m.slug == "rust-ownership").unwrap();
+        assert!(owner_meta.linked_from.contains(&"borrowing".to_string()));
+
+        // search
+        let results = engine.search("所有权").unwrap();
+        assert_eq!(results.len(), 2); // both notes mention 所有权
+
+        let results = engine.search("核心概念").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].slug, "rust-ownership");
+
+        let results = engine.search("rust").unwrap();
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_build_graph() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = WikiEngine::new(tmp.path().to_path_buf());
+        engine.init().unwrap();
+
+        engine
+            .write_note(
+                "rust-ownership",
+                "Ownership",
+                "See [[borrowing]] and [[lifetimes]].",
+                &["rust".into()],
+                "concepts",
+            )
+            .unwrap();
+        engine
+            .write_note(
+                "borrowing",
+                "Borrowing",
+                "Related to [[rust-ownership]] and [[lifetimes]].",
+                &["rust".into()],
+                "concepts",
+            )
+            .unwrap();
+
+        let graph = engine.build_graph().unwrap();
+        assert_eq!(graph.nodes.len(), 3); // ownership, borrowing, lifetimes (ghost)
+        assert!(graph.edges.len() >= 2);
+    }
+
+    #[test]
+    fn test_delete_note() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = WikiEngine::new(tmp.path().to_path_buf());
+        engine.init().unwrap();
+
+        engine
+            .write_note("test-note", "Test", "Body", &[], "notes")
+            .unwrap();
+        assert!(engine.read_note("test-note").is_ok());
+
+        engine.delete_note("test-note").unwrap();
+        assert!(engine.read_note("test-note").is_err());
+    }
+}

@@ -1,4 +1,10 @@
+use std::collections::HashMap;
+use std::sync::atomic::Ordering;
+
+use futures::FutureExt;
+
 use ohmywu_domain::chrono_now;
+use ohmywu_domain::RiskLevel;
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
@@ -92,11 +98,21 @@ pub async fn agent_loop(
 
     // conversation loop
     for _iteration in 0..MAX_ITERATIONS {
-        let response: ChatResponse = if let Some(handle) = app_handle {
+        // check cancellation
+        if state.cancel_token.load(Ordering::SeqCst) {
+            return Ok(AgentResponse {
+                content: "操作已中断。".into(),
+                executions,
+                task_id: last_task_id,
+            });
+        }
+
+        let (response, mut early_cache) = if let Some(handle) = app_handle {
             // streaming mode: collect all content and tool calls
-            chat_with_streaming(provider.as_ref(), &messages, &tools, handle).await?
+            chat_with_streaming(provider.as_ref(), &messages, &tools, handle, state).await?
         } else {
-            provider.chat(&messages, &tools).await?
+            let resp = provider.chat(&messages, &tools).await?;
+            (resp, HashMap::new())
         };
 
         // If the assistant responds with content only (no tool calls), return it
@@ -147,13 +163,25 @@ pub async fn agent_loop(
                 tc.function.arguments.clone(),
             ));
 
-            futures.push(tools::dispatch_tool(
-                state,
-                ExecuteRequest {
-                    capability,
-                    params,
-                },
-            ));
+            // Use cached result if early-executed during streaming
+            if let Some(cached) = early_cache.remove(&tc.id) {
+                futures.push(futures::future::ready(cached).boxed());
+            } else {
+                let state_clone = state.clone();
+                futures.push(
+                    async move {
+                        tools::dispatch_tool(
+                            &state_clone,
+                            ExecuteRequest {
+                                capability,
+                                params,
+                            },
+                        )
+                        .await
+                    }
+                    .boxed(),
+                );
+            }
         }
 
         // Run all tool dispatches concurrently
@@ -192,18 +220,26 @@ pub async fn agent_loop(
     })
 }
 
-/// Streaming chat: emit chunks via Tauri events, return the final ChatResponse.
+/// Streaming chat: emit chunks via Tauri events, execute read-only tools during streaming.
+/// Returns (ChatResponse, early_cache) where early_cache maps tool_call_id → ExecuteResult
+/// for read-only tools that were executed before streaming finished.
 async fn chat_with_streaming(
     provider: &dyn LlmProvider,
     messages: &[ChatMessage],
     tools: &[ohmywu_llm_adapter::types::ToolDef],
     app_handle: &tauri::AppHandle,
-) -> std::result::Result<ChatResponse, LlmError> {
+    state: &AppState,
+) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
     use futures::StreamExt;
+    use std::collections::HashSet;
 
     let mut stream = provider.chat_stream(messages, tools).await?;
     let mut full_content = String::new();
     let mut full_tool_calls: Vec<ToolCall> = Vec::new();
+    let mut seen_tool_ids: HashSet<String> = HashSet::new();
+
+    // Track early-executed tool calls spawned during streaming
+    let mut early_handles: Vec<(String, tokio::task::JoinHandle<tools::ExecuteResult>)> = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -212,13 +248,44 @@ async fn chat_with_streaming(
                     full_content.push_str(delta);
                 }
 
-                // Accumulate tool call deltas
+                // Accumulate tool call deltas — dedup by ID
                 if let Some(ref delta) = c.tool_call_delta
                     && let Some(ref args) = delta.arguments_delta
+                    && let Ok(tcs) = serde_json::from_str::<Vec<ToolCall>>(args)
                 {
-                    // Try parsing as a complete tool call
-                    if let Ok(tcs) = serde_json::from_str::<Vec<ToolCall>>(args) {
-                        full_tool_calls.extend(tcs);
+                    for tc in &tcs {
+                        if seen_tool_ids.insert(tc.id.clone()) {
+                            full_tool_calls.push(tc.clone());
+
+                            // Only early-execute if arguments are complete JSON
+                            if let Ok(params) =
+                                serde_json::from_str::<serde_json::Value>(&tc.function.arguments)
+                            {
+                                // Only read-only tools are safe to execute early
+                                let is_readonly = state
+                                    .capabilities
+                                    .get(&tc.function.name)
+                                    .map(|c| matches!(c.risk_level, RiskLevel::ReadOnly))
+                                    .unwrap_or(false);
+
+                                if is_readonly {
+                                    let state_clone = state.clone();
+                                    let cap_name = tc.function.name.clone();
+                                    let tc_id = tc.id.clone();
+                                    let handle = tokio::spawn(async move {
+                                        tools::dispatch_tool(
+                                            &state_clone,
+                                            ExecuteRequest {
+                                                capability: cap_name,
+                                                params,
+                                            },
+                                        )
+                                        .await
+                                    });
+                                    early_handles.push((tc_id, handle));
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -243,19 +310,30 @@ async fn chat_with_streaming(
         }
     }
 
-    Ok(ChatResponse {
-        role: "assistant".into(),
-        content: if full_content.is_empty() {
-            None
-        } else {
-            Some(full_content)
+    // Collect early execution results (tasks ran concurrently with streaming, likely done)
+    let mut early_cache: HashMap<String, tools::ExecuteResult> = HashMap::new();
+    for (tc_id, handle) in early_handles {
+        if let Ok(result) = handle.await {
+            early_cache.insert(tc_id, result);
+        }
+    }
+
+    Ok((
+        ChatResponse {
+            role: "assistant".into(),
+            content: if full_content.is_empty() {
+                None
+            } else {
+                Some(full_content)
+            },
+            tool_calls: if full_tool_calls.is_empty() {
+                None
+            } else {
+                Some(full_tool_calls)
+            },
         },
-        tool_calls: if full_tool_calls.is_empty() {
-            None
-        } else {
-            Some(full_tool_calls)
-        },
-    })
+        early_cache,
+    ))
 }
 
 /// Save a message to the session with execution records.

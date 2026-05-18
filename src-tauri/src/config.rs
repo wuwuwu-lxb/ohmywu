@@ -13,7 +13,9 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default = "default_accent")]
     pub accent: String,
-    /// "solid" | "image" | "video"
+    #[serde(default = "default_background_preset")]
+    pub background_preset: String,
+    /// "solid" | "image"
     #[serde(default = "default_background_mode")]
     pub background_mode: String,
     /// surface translucency 35-88
@@ -28,6 +30,11 @@ pub struct AppConfig {
     /// mask opacity 0-100
     #[serde(default = "default_bg_mask")]
     pub background_mask_opacity: u8,
+    /// follow uploaded image dominant color
+    #[serde(default = "default_background_auto_theme")]
+    pub background_auto_theme: bool,
+    #[serde(default)]
+    pub background_theme_color: Option<String>,
     #[serde(default)]
     pub llm_provider: Option<LlmConfig>,
     #[serde(default)]
@@ -42,6 +49,9 @@ fn default_theme() -> String {
 }
 fn default_accent() -> String {
     "#3b82f6".into()
+}
+fn default_background_preset() -> String {
+    "noctis".into()
 }
 fn default_background_mode() -> String {
     "solid".into()
@@ -58,6 +68,9 @@ fn default_bg_blur() -> u8 {
 fn default_bg_mask() -> u8 {
     30
 }
+fn default_background_auto_theme() -> bool {
+    true
+}
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -65,11 +78,14 @@ impl Default for AppConfig {
             policy_mode: default_policy_mode(),
             theme: default_theme(),
             accent: default_accent(),
+            background_preset: default_background_preset(),
             background_mode: default_background_mode(),
             surface_opacity: default_surface_opacity(),
             background_scale: default_bg_scale(),
             background_blur: default_bg_blur(),
             background_mask_opacity: default_bg_mask(),
+            background_auto_theme: default_background_auto_theme(),
+            background_theme_color: None,
             llm_provider: None,
             permissions: PermissionConfig::default(),
         }

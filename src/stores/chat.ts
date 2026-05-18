@@ -214,6 +214,14 @@ export const useChatStore = defineStore("chat", () => {
     }
   }
 
+  async function cancelAgent() {
+    try {
+      await invoke("cancel_agent")
+    } catch (e) {
+      console.error("Cancel agent:", e)
+    }
+  }
+
   return {
     messages,
     sessions,
@@ -227,5 +235,6 @@ export const useChatStore = defineStore("chat", () => {
     loadSession,
     refreshSessions,
     sendMessage,
+    cancelAgent,
   }
 })

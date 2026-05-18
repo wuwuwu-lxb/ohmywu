@@ -10,6 +10,7 @@ members = [
     "crates/audit",
     "crates/session",
     "crates/llm-adapter",
+    "crates/wiki",
 ]
 
 [workspace.package]

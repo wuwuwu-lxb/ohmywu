@@ -4,6 +4,7 @@ mod data_dir;
 mod permission;
 mod tools;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -19,6 +20,7 @@ use ohmywu_task_engine::TaskEngine;
 use tauri::Manager;
 use ohmywu_domain::AuditEvent;
 use ohmywu_llm_adapter::{HealthStatus, LlmConfig, ProviderMetadata};
+use ohmywu_wiki::WikiEngine;
 use serde::{Deserialize, Serialize};
 
 use config::AppConfig;
@@ -33,6 +35,8 @@ pub struct AppState {
     pub session: Arc<SessionManager>,
     pub config: Arc<RwLock<AppConfig>>,
     pub data_dir: std::path::PathBuf,
+    pub wiki: Arc<RwLock<WikiEngine>>,
+    pub cancel_token: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -50,6 +54,15 @@ impl AppState {
 
         let config = Arc::new(RwLock::new(config));
 
+        // init wiki
+        let wiki = Arc::new(RwLock::new(
+            WikiEngine::new(data_dir.join("wiki")),
+        ));
+        {
+            let w = wiki.write().unwrap();
+            w.init().unwrap_or_else(|e| eprintln!("wiki init: {}", e));
+        }
+
         // register initial capabilities
         register_capabilities(&capabilities);
         // register initial actions
@@ -64,6 +77,8 @@ impl AppState {
             session,
             config,
             data_dir,
+            wiki,
+            cancel_token: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -107,6 +122,32 @@ fn register_capabilities(registry: &CapabilityRegistry) {
     registry.register(Capability::new(
         "thinking",
         "Use for internal reasoning and planning steps. Does not execute anything.",
+        RiskLevel::ReadOnly,
+    ));
+    // wiki capabilities
+    registry.register(Capability::new(
+        "wiki_read",
+        "Read a wiki note by slug. Returns markdown content with metadata.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "wiki_write",
+        "Create or update a wiki note. Specify slug, title, body, tags, and optional folder.",
+        RiskLevel::ControlledWrite,
+    ));
+    registry.register(Capability::new(
+        "wiki_search",
+        "Search wiki notes by keyword. Returns matching notes with relevance scores.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "wiki_list",
+        "List all wiki notes sorted by last updated.",
+        RiskLevel::ReadOnly,
+    ));
+    registry.register(Capability::new(
+        "wiki_graph",
+        "Get the wiki knowledge graph as nodes and edges for visualization.",
         RiskLevel::ReadOnly,
     ));
 }
@@ -209,12 +250,21 @@ async fn delete_session(
 // ── Tauri Commands: chat ─────────────────────────────────────────
 
 #[tauri::command]
+fn cancel_agent(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.cancel_token.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+#[tauri::command]
 async fn send_message(
     session_id: String,
     content: String,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<SessionMessage, String> {
+    // reset cancel token for this new message
+    state.cancel_token.store(false, Ordering::SeqCst);
+
     let now = chrono_now();
 
     // save user message
@@ -449,11 +499,20 @@ async fn save_config(
 // ── Tauri Commands: background ───────────────────────────────────
 
 #[tauri::command]
-fn save_background_file(data: Vec<u8>, filename: String, state: tauri::State<'_, AppState>) -> Result<String, String> {
+fn save_background_file(
+    data: Vec<u8>,
+    filename: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let bg_dir = state.data_dir.join("background");
     std::fs::create_dir_all(&bg_dir).map_err(|e| format!("Create bg dir: {}", e))?;
+
+    let kind = background_kind_from_filename(&filename)?;
+    clear_background_dir(&bg_dir)?;
+
     let path = bg_dir.join(&filename);
     std::fs::write(&path, &data).map_err(|e| format!("Write bg file: {}", e))?;
+    save_background_meta(&bg_dir, &filename, kind)?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -463,15 +522,121 @@ fn get_background_path(state: tauri::State<'_, AppState>) -> Result<Option<Strin
     if !bg_dir.exists() {
         return Ok(None);
     }
-    // return the first file found (bg_image.* or bg_video.*)
-    for entry in std::fs::read_dir(&bg_dir).map_err(|e| format!("Read bg dir: {}", e))? {
-        let entry = entry.map_err(|e| format!("Read entry: {}", e))?;
+
+    if let Some(path) = background_path_from_meta(&bg_dir)? {
+        return Ok(Some(path));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+fn clear_background_file(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let bg_dir = state.data_dir.join("background");
+    if bg_dir.exists() {
+        clear_background_dir(&bg_dir)?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BackgroundMeta {
+    filename: String,
+    kind: String,
+}
+
+fn background_kind_from_filename(filename: &str) -> Result<&'static str, String> {
+    if filename.starts_with("bg_image.") {
+        Ok("image")
+    } else {
+        Err("Background filename must start with `bg_image.`".into())
+    }
+}
+
+fn clear_background_dir(bg_dir: &std::path::Path) -> Result<(), String> {
+    if !bg_dir.exists() {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(bg_dir).map_err(|e| format!("Read bg dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Read bg entry: {}", e))?;
+        let path = entry.path();
+        if path.is_file() {
+            std::fs::remove_file(&path).map_err(|e| format!("Remove bg file {}: {}", path.display(), e))?;
+        }
+    }
+    Ok(())
+}
+
+fn save_background_meta(bg_dir: &std::path::Path, filename: &str, kind: &str) -> Result<(), String> {
+    let meta = BackgroundMeta {
+        filename: filename.to_string(),
+        kind: kind.to_string(),
+    };
+    let tmp = bg_dir.join("background.json.tmp");
+    let final_path = bg_dir.join("background.json");
+    let json = serde_json::to_string_pretty(&meta)
+        .map_err(|e| format!("Serialize background meta: {}", e))?;
+    std::fs::write(&tmp, json).map_err(|e| format!("Write background meta tmp: {}", e))?;
+    std::fs::rename(&tmp, &final_path).map_err(|e| format!("Rename background meta: {}", e))?;
+    Ok(())
+}
+
+fn background_path_from_meta(bg_dir: &std::path::Path) -> Result<Option<String>, String> {
+    let meta_path = bg_dir.join("background.json");
+    if meta_path.exists() {
+        let content = std::fs::read_to_string(&meta_path)
+            .map_err(|e| format!("Read background meta: {}", e))?;
+        let meta: BackgroundMeta = serde_json::from_str(&content)
+            .map_err(|e| format!("Parse background meta: {}", e))?;
+        let path = bg_dir.join(&meta.filename);
+        if meta.kind == "image" && meta.filename.starts_with("bg_image.") && path.exists() {
+            return Ok(Some(path.to_string_lossy().to_string()));
+        }
+    }
+
+    for entry in std::fs::read_dir(bg_dir).map_err(|e| format!("Read bg dir: {}", e))? {
+        let entry = entry.map_err(|e| format!("Read bg entry: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with("bg_image.") || name.starts_with("bg_video.") {
+        if name.starts_with("bg_image.") {
             return Ok(Some(entry.path().to_string_lossy().to_string()));
         }
     }
+
     Ok(None)
+}
+
+// ── Tauri Commands: wiki ──────────────────────────────────────────
+
+#[tauri::command]
+fn wiki_list_notes(state: tauri::State<'_, AppState>) -> Result<Vec<ohmywu_wiki::NoteMeta>, String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.list_notes()
+}
+
+#[tauri::command]
+fn wiki_read_note(
+    slug: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ohmywu_wiki::WikiNote, String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.read_note(&slug)
+}
+
+#[tauri::command]
+fn wiki_search_notes(
+    query: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ohmywu_wiki::NoteMeta>, String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.search(&query)
+}
+
+#[tauri::command]
+fn wiki_get_graph(
+    state: tauri::State<'_, AppState>,
+) -> Result<ohmywu_wiki::GraphData, String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.build_graph()
 }
 
 // ── Tauri App Entry ──────────────────────────────────────────────
@@ -496,6 +661,7 @@ pub fn run() {
             get_llm_providers,
             execute_capability,
             set_policy_mode,
+            cancel_agent,
             create_session,
             list_sessions,
             load_session,
@@ -507,6 +673,11 @@ pub fn run() {
             test_llm_connection_with_config,
             save_background_file,
             get_background_path,
+            clear_background_file,
+            wiki_list_notes,
+            wiki_read_note,
+            wiki_search_notes,
+            wiki_get_graph,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

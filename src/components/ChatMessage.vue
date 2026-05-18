@@ -56,8 +56,8 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 .msg-row {
   display: flex;
   gap: 12px;
-  padding: 8px 20px;
-  max-width: 760px;
+  padding: 10px 24px;
+  max-width: 820px;
   margin: 0 auto;
   width: 100%;
 }
@@ -69,16 +69,18 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 /* Agent icon */
 .msg-icon {
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: var(--radius-sm);
-  background: var(--accent-soft);
-  color: var(--accent);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.16);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  color: #f6f8ff;
   font-size: 14px;
   margin-top: 2px;
+  box-shadow: var(--shadow-glow);
 }
 
 /* Message body */
@@ -124,14 +126,23 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-color);
+  box-shadow: var(--shadow-surface);
+}
+
+.msg-row.agent .msg-text {
+  background: rgba(var(--accent-rgb), 0.07);
+  border-color: rgba(var(--accent-rgb), 0.14);
 }
 
 .user-text {
-  padding: 8px 14px;
-  border-radius: var(--radius-lg);
-  background: var(--surface-1);
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  background: rgba(var(--accent-rgb), 0.12);
+  border-color: rgba(var(--accent-rgb), 0.22);
+  color: var(--text-primary);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
 }
 
 /* Executions */
@@ -146,8 +157,8 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
   gap: 4px;
   margin-top: 8px;
   padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-color);
   font-size: var(--text-xs);
   color: var(--text-secondary);
@@ -156,9 +167,9 @@ const emit = defineEmits<{ "show-task": [taskId: string] }>()
 }
 
 .msg-task-link:hover {
-  border-color: var(--border-hover);
+  border-color: rgba(var(--accent-rgb), 0.22);
   color: var(--text-primary);
-  background: var(--surface-2);
+  background: rgba(var(--accent-rgb), 0.08);
 }
 
 .link-arrow {

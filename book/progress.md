@@ -1,10 +1,10 @@
 # OhMyWu 当前进程
 
-> 最后更新：2026-05-14
+> 最后更新：2026-05-19
 
 ## 版本：v0.3.0-pre
 
-## 当前里程碑：UI 全面升级 + LLM 适配器重构完成
+## 当前里程碑：UI 美化收口 + LLM 适配器重构完成
 
 ---
 
@@ -36,14 +36,15 @@
 - [x] 半透明表面系统：`--surface-1/2/3` 三档可调透明度，`--border-color/hover` 两档边框
 - [x] RGB 色系 token：`--accent-rgb` 分量供 `rgba()` 构造，accent 推导全部表面/边框/hover 颜色
 - [x] SPlayer AppLayout 三层结构：background-container → mask → transparent app shell
-- [x] 字体更换：DM Sans + Space Mono（取代 Inter）
+- [x] 纯色模式收口：取消噪点层与发糊蒙版感，统一为更实的纯色背景
+- [x] 图片背景同步主色：图片上传后自动提取主色并驱动主题色
 - [x] 侧栏图标 emoji 化，消息渐入动画（fadeUp stagger）
 
 ### 背景系统重写
 
-- [x] 删除 4 个内置 CSS 渐变"壁纸"，默认纯色背景（accent 推导微妙渐变）
-- [x] 三档背景：solid / image / video
-- [x] 自定义图片/视频上传（HTML input → ArrayBuffer → Rust `save_background_file` → `asset://` URL）
+- [x] 删除 4 个内置 CSS 渐变"壁纸"，默认纯色背景
+- [x] 背景模式收敛为 solid / image，视频上传暂缓
+- [x] 自定义图片上传（HTML input → ArrayBuffer → Rust `save_background_file` → `asset://` URL）
 - [x] 背景控制：scale (100-200%) / blur (0-40px) / maskOpacity (0-80%)
 
 ### 主题持久化

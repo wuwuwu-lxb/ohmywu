@@ -3,18 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::tools::ToolKind;
 
 /// Permission configuration — Claude Code style allow/deny rules.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PermissionConfig {
     /// Rules ordered: deny wins over allow regardless of order.
     #[serde(default)]
     pub rules: Vec<PermissionRule>,
-}
-
-impl Default for PermissionConfig {
-    fn default() -> Self {
-        Self { rules: vec![] }
-    }
 }
 
 /// A single allow/deny rule with optional parameter pattern.
@@ -54,7 +48,7 @@ pub fn check_permission(
         if rule.effect != "deny" {
             continue;
         }
-        if rule_matches(&rule.tool, tool_name, &param_str) {
+        if rule_matches(&rule.tool, tool_name, param_str) {
             return PermissionCheck::Denied(format!(
                 "权限拒绝: {} {} (匹配规则 '{}')",
                 tool_name, param_str, rule.tool
@@ -68,7 +62,7 @@ pub fn check_permission(
     if has_allow_rules {
         // There are explicit allow rules — tool must match one
         let allowed = config.rules.iter().any(|r| {
-            r.effect == "allow" && rule_matches(&r.tool, tool_name, &param_str)
+            r.effect == "allow" && rule_matches(&r.tool, tool_name, param_str)
         });
 
         if !allowed {

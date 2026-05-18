@@ -5,6 +5,7 @@ pub mod grep;
 pub mod read;
 pub mod thinking;
 pub mod web_fetch;
+pub mod wiki;
 pub mod write;
 
 use std::time::{Duration, Instant};
@@ -225,6 +226,39 @@ pub fn tool_params(name: &str) -> Option<serde_json::Value> {
             },
             "required": ["thought"]
         })),
+        "wiki_read" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "slug": { "type": "string", "description": "The note slug to read" }
+            },
+            "required": ["slug"]
+        })),
+        "wiki_write" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "slug": { "type": "string", "description": "URL-friendly identifier (e.g. rust-ownership)" },
+                "title": { "type": "string", "description": "Human-readable title" },
+                "body": { "type": "string", "description": "Markdown body. Use [[slug]] for interlinking." },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Tags for categorization" },
+                "folder": { "type": "string", "description": "Folder: concepts, notes, daily, or profile" }
+            },
+            "required": ["slug", "title", "body"]
+        })),
+        "wiki_search" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string", "description": "Search keywords" }
+            },
+            "required": ["query"]
+        })),
+        "wiki_list" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })),
+        "wiki_graph" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })),
         _ => None,
     }
 }
@@ -334,6 +368,17 @@ pub async fn dispatch_tool(
     let exec_result: Result<ExecOutput, String> = if cap_name == "thinking" {
         // thinking is instant, no blocking needed
         thinking::execute(&params)
+    } else if cap_name.starts_with("wiki_") {
+        // wiki tools: read/write/search/list/graph — fast file I/O
+        let wiki_lock = state.wiki.read().unwrap();
+        match cap_name.as_str() {
+            "wiki_read" => wiki::read(&params, &wiki_lock),
+            "wiki_write" => wiki::write(&params, &wiki_lock),
+            "wiki_search" => wiki::search(&params, &wiki_lock),
+            "wiki_list" => wiki::list(&params, &wiki_lock),
+            "wiki_graph" => wiki::graph(&params, &wiki_lock),
+            other => Err(format!("Unknown capability: {}", other)),
+        }
     } else {
         let cap_name_clone = cap_name.clone();
         let params_clone = params.clone();

@@ -44,10 +44,11 @@ const expanded = ref(false)
 <style scoped>
 .exec-card {
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-md);
+  border-radius: 14px;
   overflow: hidden;
-  background: var(--surface-2);
-  margin: 8px 0;
+  background: var(--surface-1);
+  margin: 10px 0;
+  box-shadow: var(--shadow-surface);
 }
 
 .exec-card.success { border-left: 3px solid #22c55e; }
@@ -59,7 +60,7 @@ const expanded = ref(false)
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: none;
   background: transparent;
   color: var(--text-primary);
@@ -70,7 +71,7 @@ const expanded = ref(false)
 }
 
 .exec-header:hover {
-  background: var(--hover-bg);
+  background: var(--surface-2);
 }
 
 .exec-status-dot {
@@ -94,7 +95,7 @@ const expanded = ref(false)
 
 .exec-action {
   flex: 1;
-  color: var(--text-secondary);
+  color: var(--text-primary);
 }
 
 .exec-duration {
@@ -110,7 +111,7 @@ const expanded = ref(false)
 
 .exec-body {
   border-top: 1px solid var(--border-color);
-  padding: 8px 10px;
+  padding: 10px 12px;
 }
 
 .exec-section {
@@ -139,7 +140,7 @@ const expanded = ref(false)
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
-  background: var(--surface-1);
+  background: var(--surface-2);
   padding: 6px 8px;
   border-radius: var(--radius-sm);
   overflow-x: auto;

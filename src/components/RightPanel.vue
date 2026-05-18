@@ -32,18 +32,19 @@ const emit = defineEmits<{ close: [] }>()
 .right-panel {
   width: 0;
   min-width: 0;
-  background: var(--surface-2);
+  background: var(--shell-bg);
   border-left: 1px solid var(--border-color);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(var(--shell-blur));
+  -webkit-backdrop-filter: blur(var(--shell-blur));
   overflow: hidden;
-  transition: width 0.25s ease, background 0.3s ease;
+  transition: width 0.3s var(--ease-out), background 0.3s ease;
   display: flex;
   flex-direction: column;
 }
 
 .right-panel.open {
   width: var(--right-panel-w);
+  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.16);
 }
 
 .panel-header {
@@ -69,8 +70,8 @@ const emit = defineEmits<{ close: [] }>()
   display: flex;
   align-items: center;
   justify-content: center;
-  background: none;
-  border: none;
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--text-tertiary);
   cursor: pointer;
   font-size: 14px;
@@ -79,8 +80,9 @@ const emit = defineEmits<{ close: [] }>()
 }
 
 .panel-close:hover {
-  color: var(--text-primary);
-  background: var(--hover-bg);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.08);
+  border-color: rgba(var(--accent-rgb), 0.18);
 }
 
 .panel-body {

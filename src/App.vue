@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, markRaw } from "vue"
-import { invoke } from "@tauri-apps/api/core"
+import { ref, onMounted, markRaw, computed } from "vue"
+import { convertFileSrc, invoke } from "@tauri-apps/api/core"
 import Sidebar from "./components/Sidebar.vue"
 import RightPanel from "./components/RightPanel.vue"
 import { useSidebarNav } from "./composables/useNav"
@@ -9,10 +9,16 @@ import ChatView from "./views/ChatView.vue"
 import ActionsView from "./views/ActionsView.vue"
 import AuditView from "./views/AuditView.vue"
 import SettingsView from "./views/SettingsView.vue"
+import WikiView from "./views/WikiView.vue"
 import type { Component } from "vue"
 
-const { register } = useSidebarNav()
-const { initFromConfig, setBackgroundImage, setBackgroundVideo, backgroundMode, backgroundVideoUrl } = useTheme()
+const { items, register } = useSidebarNav()
+const {
+  initFromConfig,
+  backgroundImageUrl,
+  setBackgroundImage,
+  backgroundMode,
+} = useTheme()
 
 const activeView = ref<string>("chat")
 const rightPanelOpen = ref(false)
@@ -20,6 +26,7 @@ const rightPanelTaskId = ref<string | null>(null)
 
 const viewMap: Record<string, Component> = {
   chat: markRaw(ChatView),
+  wiki: markRaw(WikiView),
   actions: markRaw(ActionsView),
   audit: markRaw(AuditView),
   __settings__: markRaw(SettingsView),
@@ -34,26 +41,30 @@ const handleShowTask = (taskId: string) => {
   rightPanelOpen.value = true
 }
 
+const currentViewLabel = computed(() => {
+  if (activeView.value === "__settings__") return "设置"
+  return items.value.find((item) => item.id === activeView.value)?.label || "OhMyWu"
+})
+
 onMounted(async () => {
   try {
     const cfg = await invoke<{
       theme: string; accent: string; background_mode: string;
+      background_preset: string;
       surface_opacity: number; background_scale: number;
       background_blur: number; background_mask_opacity: number;
+      background_auto_theme: boolean;
+      background_theme_color?: string | null;
     }>("get_config")
     initFromConfig(cfg)
 
-    // Load custom background image if in image/video mode
-    if (cfg.background_mode === "image" || cfg.background_mode === "video") {
+    // Load custom background image in image mode
+    if (cfg.background_mode === "image") {
       try {
         const bgPath = await invoke<string | null>("get_background_path")
         if (bgPath) {
-          const url = `asset://localhost/${bgPath}`
-          if (cfg.background_mode === "video") {
-            setBackgroundVideo(url)
-          } else {
-            setBackgroundImage(url)
-          }
+          const url = convertFileSrc(bgPath)
+          await setBackgroundImage(url, { syncTheme: !cfg.background_theme_color && cfg.background_auto_theme })
         }
       } catch { /* no saved bg */ }
     }
@@ -61,6 +72,7 @@ onMounted(async () => {
     console.error("Init config:", e)
   }
   register({ id: "chat", label: "对话", icon: "💬" })
+  register({ id: "wiki", label: "知识库", icon: "📖" })
   register({ id: "actions", label: "Actions", icon: "⚡" })
   register({ id: "audit", label: "审计日志", icon: "📋" })
 })
@@ -70,29 +82,16 @@ onMounted(async () => {
   <div class="app-shell">
     <!-- SPlayer AppLayout pattern: background container behind everything -->
     <div
-      v-if="backgroundMode === 'image' || backgroundMode === 'video'"
+      v-if="backgroundMode === 'image'"
       class="background-container"
     >
+      <div class="background-ambient" />
       <div
-        v-if="backgroundMode === 'image'"
         class="background-media"
         :style="{
-          backgroundImage: `var(--bg-image-url)`,
+          backgroundImage: backgroundImageUrl ? `url(${backgroundImageUrl})` : 'none',
           backgroundSize: 'cover',
           backgroundPosition: 'center',
-          transform: `scale(var(--bg-scale))`,
-          filter: `blur(var(--bg-blur))`,
-        }"
-      />
-      <video
-        v-else
-        class="background-media"
-        :src="backgroundVideoUrl"
-        autoplay
-        loop
-        muted
-        :style="{
-          objectFit: 'cover',
           transform: `scale(var(--bg-scale))`,
           filter: `blur(var(--bg-blur))`,
         }"
@@ -104,8 +103,33 @@ onMounted(async () => {
       <Sidebar :active-id="activeView" @select="onNavSelect" />
 
       <main class="main-area">
-        <ChatView v-if="activeView === 'chat'" @show-task="handleShowTask" />
-        <component v-else :is="viewMap[activeView] || viewMap['chat']" />
+        <header class="topbar">
+          <div class="topbar-left">
+            <button class="topbar-btn" type="button" aria-label="back">
+              <span>‹</span>
+            </button>
+            <button class="topbar-btn" type="button" aria-label="forward">
+              <span>›</span>
+            </button>
+            <div class="topbar-title">
+              <h1>{{ currentViewLabel }}</h1>
+            </div>
+          </div>
+          <div class="topbar-right">
+            <div class="topbar-search">
+              <span class="topbar-search-icon">⌕</span>
+              <span class="topbar-search-text">搜索、命令或知识库</span>
+            </div>
+            <button class="topbar-btn" type="button" @click="activeView = '__settings__'">
+              <span>⚙</span>
+            </button>
+          </div>
+        </header>
+
+        <section class="content-frame">
+          <ChatView v-if="activeView === 'chat'" @show-task="handleShowTask" />
+          <component v-else :is="viewMap[activeView] || viewMap['chat']" />
+        </section>
       </main>
 
       <RightPanel :open="rightPanelOpen" title="执行链路" @close="rightPanelOpen = false">
@@ -128,13 +152,19 @@ onMounted(async () => {
   background: var(--bg-gradient);
 }
 
-/* SPlayer background-container pattern */
 .background-container {
   position: fixed;
   inset: 0;
   z-index: 0;
   overflow: hidden;
 }
+
+.background-ambient {
+  position: absolute;
+  inset: 0;
+  background: rgba(6, 8, 12, 0.18);
+}
+
 .background-media {
   position: absolute;
   inset: 0;
@@ -142,6 +172,7 @@ onMounted(async () => {
   background-position: center;
   transform-origin: center;
 }
+
 .background-mask {
   position: absolute;
   inset: 0;
@@ -151,7 +182,7 @@ onMounted(async () => {
   position: relative;
   z-index: 1;
   display: flex;
-  height: 100vh;
+  height: 100%;
   background: transparent;
   overflow: hidden;
 }
@@ -162,7 +193,96 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  background: var(--shell-bg);
+  backdrop-filter: blur(var(--shell-blur));
+  -webkit-backdrop-filter: blur(var(--shell-blur));
   animation: fadeIn 0.5s 0.1s var(--ease-out) both;
+}
+
+.topbar {
+  height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--shell-bg-soft);
+  backdrop-filter: blur(calc(var(--shell-blur) * 0.6));
+  -webkit-backdrop-filter: blur(calc(var(--shell-blur) * 0.6));
+}
+
+.topbar-left,
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-btn,
+.topbar-chip {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.topbar-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.topbar-btn:hover,
+.topbar-chip:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.topbar-title h1 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.topbar-chip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.topbar-search {
+  min-width: 260px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  color: var(--text-tertiary);
+}
+
+.topbar-search-icon {
+  font-size: 14px;
+}
+
+.topbar-search-text {
+  font-size: 12px;
+}
+
+.content-frame {
+  flex: 1;
+  min-height: 0;
+  padding: 0 24px 0;
+  overflow: hidden;
 }
 
 @keyframes fadeIn {
@@ -172,4 +292,18 @@ onMounted(async () => {
 
 .panel-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 .panel-placeholder { color: var(--text-tertiary); }
+
+@media (max-width: 960px) {
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .content-frame {
+    padding: 0 16px;
+  }
+
+  .topbar-search {
+    min-width: 180px;
+  }
+}
 </style>
