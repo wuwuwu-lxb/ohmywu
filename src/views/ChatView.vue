@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, watch } from "vue"
+import { computed, ref, nextTick, onMounted, watch } from "vue"
 import ChatMessage from "../components/ChatMessage.vue"
 import { useChatStore } from "../stores/chat"
+import { useAgentStore } from "../stores/agents"
 
 const store = useChatStore()
+const agentStore = useAgentStore()
 const input = ref("")
 const chatEl = ref<HTMLElement>()
 
@@ -11,11 +13,47 @@ const emit = defineEmits<{
   "show-task": [taskId: string]
 }>()
 
+const renderedMessages = computed(() => {
+  const items = [...store.messages]
+  if (!store.pending || !store.activeTurnId) {
+    return items
+  }
+
+  const liveMsg = {
+    id: `turn-${store.activeTurnId}`,
+    role: "agent" as const,
+    content: store.streamingContent,
+    turnId: store.activeTurnId,
+    agentName: currentAgent.value?.name || "OhMyWu",
+    agentIcon: "✦",
+    timestamp: Date.now(),
+  }
+
+  const existingIndex = items.findIndex(
+    (msg) => msg.role === "agent" && msg.turnId === store.activeTurnId
+  )
+
+  if (existingIndex >= 0) {
+    items[existingIndex] = {
+      ...items[existingIndex],
+      content: store.streamingContent || items[existingIndex].content,
+    }
+    return items
+  }
+
+  items.push(liveMsg)
+  return items
+})
+
+const currentAgent = computed(() =>
+  agentStore.agents.find((agent) => agent.id === agentStore.activeAgentId) || agentStore.agents[0]
+)
+
 const send = async () => {
   const text = input.value.trim()
   if (!text || store.pending) return
   input.value = ""
-  await store.sendMessage(text)
+  await store.sendMessage(text, currentAgent.value)
   scroll()
 }
 
@@ -43,6 +81,7 @@ const newSession = async () => {
 
 watch(() => store.messages.length, () => scroll())
 watch(() => store.streamingContent, () => scroll())
+watch(() => store.activeTurnId, () => scroll())
 
 onMounted(async () => {
   await store.init()
@@ -66,26 +105,6 @@ onMounted(async () => {
       <button class="session-btn" @click="newSession" title="新建对话">
         <span>+</span>
       </button>
-      <div class="mode-switch">
-        <button
-          v-for="mode in ['plan', 'agent', 'auto']"
-          :key="mode"
-          class="mode-chip"
-          :class="{ active: store.agentMode === mode }"
-          @click="store.setAgentMode(mode as 'plan' | 'agent' | 'auto')"
-        >
-          {{ mode }}
-        </button>
-      </div>
-    </div>
-
-    <div class="runtime-bar">
-      <span class="runtime-label">Runtime</span>
-      <span class="runtime-value">{{ store.runtimeStatus }}</span>
-      <span v-if="store.runtimeTurns.length" class="runtime-meta">
-        {{ store.runtimeTurns[store.runtimeTurns.length - 1].status }} ·
-        {{ store.runtimeTurns[store.runtimeTurns.length - 1].executionCount }} tools
-      </span>
     </div>
 
     <!-- messages area -->
@@ -119,59 +138,65 @@ onMounted(async () => {
 
       <!-- messages -->
       <ChatMessage
-        v-for="(msg, i) in store.messages"
-        :key="msg.id"
+        v-for="(msg, i) in renderedMessages"
+        :key="msg.role === 'agent' && msg.turnId ? msg.turnId : msg.id"
         :msg="msg"
+        :runtime="msg.turnId ? store.runtimeByTurnId[msg.turnId] : undefined"
+        :pending="store.pending && !!store.activeTurnId && msg.turnId === store.activeTurnId"
+        :memory-candidate="msg.turnId ? store.memoryCandidates[msg.turnId] : undefined"
+        :memory-generating="msg.turnId ? !!store.memoryGenerating[msg.turnId] : false"
+        :memory-saving="msg.turnId ? !!store.memorySaving[msg.turnId] : false"
+        :memory-error="msg.turnId ? store.memoryErrors[msg.turnId] : null"
+        :memory-saved="msg.turnId ? store.memorySaved[msg.turnId] : null"
         :style="{ animationDelay: `${i * 15}ms` }"
         class="msg-animate"
         @show-task="(taskId: string) => emit('show-task', taskId)"
+        @generate-memory="(turnId: string) => store.generateMemoryCandidate(turnId)"
+        @save-memory="(turnId: string) => store.saveMemoryCandidate(turnId)"
+        @clear-memory="(turnId: string) => store.clearMemoryCandidate(turnId)"
+        @update-memory-candidate="({ turnId, patch }) => store.updateMemoryCandidate(turnId, patch)"
       />
-
-      <!-- streaming -->
-      <div v-if="store.streamingContent" class="streaming-row">
-        <div class="msg-icon">
-          <span>✦</span>
-        </div>
-        <div class="msg-body">
-          <div class="msg-header">
-            <span class="msg-sender">OhMyWu</span>
-          </div>
-          <div class="streaming-text">
-            {{ store.streamingContent }}<span class="cursor-blink">|</span>
-          </div>
-        </div>
-        <button class="stop-btn" @click="store.cancelAgent" title="停止">
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <rect width="12" height="12" rx="2" fill="currentColor" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- waiting for first token -->
-      <div v-else-if="store.pending && !store.streamingContent" class="thinking-row">
-        <div class="msg-icon">
-          <span>✦</span>
-        </div>
-        <div class="thinking-dots">
-          <span class="dot" />
-          <span class="dot" />
-          <span class="dot" />
-        </div>
-        <button class="stop-btn" @click="store.cancelAgent" title="停止">
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <rect width="12" height="12" rx="2" fill="currentColor" />
-          </svg>
-        </button>
-      </div>
     </div>
 
     <!-- input bar -->
     <div class="input-bar">
-      <div class="composer-meta">
-        <div class="composer-cover">✦</div>
-        <div class="composer-copy">
-          <div class="composer-title">OhMyWu</div>
-          <div class="composer-subtitle">{{ store.pending ? "Thinking" : "Local desktop agent workspace" }}</div>
+      <div class="composer-side">
+        <div class="composer-meta">
+          <div class="composer-cover">✦</div>
+          <div class="composer-copy">
+            <div class="composer-title">{{ currentAgent?.name || "OhMyWu" }}</div>
+            <div class="composer-subtitle">
+              {{
+                store.pending
+                  ? "Thinking"
+                  : currentAgent?.persona || "Local desktop agent workspace"
+              }}
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-controls">
+          <select
+            class="agent-select"
+            :value="agentStore.activeAgentId"
+            @change="agentStore.setActiveAgent(($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="agent in agentStore.agents" :key="agent.id" :value="agent.id">
+              {{ agent.name }}
+            </option>
+          </select>
+
+          <div class="mode-switch">
+            <button
+              v-for="mode in ['plan', 'agent', 'auto']"
+              :key="mode"
+              class="mode-chip"
+              :class="{ active: store.agentMode === mode }"
+              @click="store.setAgentMode(mode as 'plan' | 'agent' | 'auto')"
+            >
+              {{ mode }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -277,10 +302,30 @@ onMounted(async () => {
   border-color: rgba(var(--accent-rgb), 0.18);
 }
 
-.mode-switch {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.agent-select {
+  height: 34px;
+  width: 100%;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-family: var(--font);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  color-scheme: dark;
+}
+
+.agent-select:hover {
+  background: var(--surface-2);
+}
+
+.agent-select:focus {
+  border-color: rgba(var(--accent-rgb), 0.18);
+  background: var(--surface-2);
 }
 
 .mode-chip {
@@ -306,34 +351,6 @@ onMounted(async () => {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--active-bg);
-}
-
-.runtime-bar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--surface-1);
-  flex-shrink: 0;
-}
-
-.runtime-label {
-  font-size: 11px;
-  font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-tertiary);
-}
-
-.runtime-value {
-  font-size: 12px;
-  color: var(--text-primary);
-}
-
-.runtime-meta {
-  font-size: 12px;
-  color: var(--text-secondary);
 }
 
 /* ── Messages Area ────────────────────────────────────────────── */
@@ -616,9 +633,16 @@ onMounted(async () => {
   border-top: 1px solid var(--border-color);
   background: var(--shell-bg-soft);
   display: grid;
-  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr) auto;
+  grid-template-columns: minmax(240px, 310px) minmax(0, 1fr) auto;
   align-items: center;
   gap: 16px;
+}
+
+.composer-side {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .composer-meta {
@@ -626,6 +650,19 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.composer-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .composer-cover {
@@ -761,6 +798,11 @@ onMounted(async () => {
     grid-template-columns: 1fr;
     gap: 12px;
     padding: 16px;
+  }
+
+  .composer-controls {
+    flex-direction: column;
+    align-items: stretch;
   }
 
   .composer-actions {

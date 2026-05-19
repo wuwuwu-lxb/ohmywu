@@ -20,6 +20,21 @@ impl ActionRegistry {
         actions.insert(action.id.clone(), action);
     }
 
+    pub fn register_many(&self, items: Vec<Action>) {
+        let mut actions = self.actions.write().unwrap();
+        for action in items {
+            actions.insert(action.id.clone(), action);
+        }
+    }
+
+    pub fn replace_all(&self, items: Vec<Action>) {
+        let mut actions = self.actions.write().unwrap();
+        actions.clear();
+        for action in items {
+            actions.insert(action.id.clone(), action);
+        }
+    }
+
     pub fn get(&self, id: &str) -> Option<Action> {
         let actions = self.actions.read().unwrap();
         actions.get(id).cloned()
@@ -27,7 +42,9 @@ impl ActionRegistry {
 
     pub fn list(&self) -> Vec<Action> {
         let actions = self.actions.read().unwrap();
-        actions.values().cloned().collect()
+        let mut items: Vec<Action> = actions.values().cloned().collect();
+        items.sort_by_key(|action| action.sort_key());
+        items
     }
 
     pub fn contains(&self, id: &str) -> bool {

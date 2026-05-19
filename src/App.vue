@@ -6,6 +6,7 @@ import RightPanel from "./components/RightPanel.vue"
 import { useSidebarNav } from "./composables/useNav"
 import { useTheme } from "./composables/useTheme"
 import ChatView from "./views/ChatView.vue"
+import AgentManagementView from "./views/AgentManagementView.vue"
 import ActionsView from "./views/ActionsView.vue"
 import AuditView from "./views/AuditView.vue"
 import SettingsView from "./views/SettingsView.vue"
@@ -26,6 +27,7 @@ const rightPanelTaskId = ref<string | null>(null)
 
 const viewMap: Record<string, Component> = {
   chat: markRaw(ChatView),
+  agents: markRaw(AgentManagementView),
   wiki: markRaw(WikiView),
   actions: markRaw(ActionsView),
   audit: markRaw(AuditView),
@@ -72,6 +74,7 @@ onMounted(async () => {
     console.error("Init config:", e)
   }
   register({ id: "chat", label: "对话", icon: "💬" })
+  register({ id: "agents", label: "Agent 管理", icon: "🧠" })
   register({ id: "wiki", label: "知识库", icon: "📖" })
   register({ id: "actions", label: "Actions", icon: "⚡" })
   register({ id: "audit", label: "审计日志", icon: "📋" })

@@ -1,30 +1,37 @@
 <script setup lang="ts">
-import { ref } from "vue"
+import { computed, ref } from "vue"
+import { getToolMeta, toolStatusLabel } from "../lib/tools"
 
 export interface ExecutionInfo {
   action: string
-  status: "running" | "success" | "failed"
+  status: "running" | "success" | "failed" | "denied" | "needs_confirm"
   input?: string
   output?: string
   error?: string
   duration?: string
 }
 
-defineProps<{ exec: ExecutionInfo }>()
+const props = defineProps<{ exec: ExecutionInfo }>()
 
 const expanded = ref(false)
+const meta = computed(() => getToolMeta(props.exec.action))
+const statusText = computed(() => toolStatusLabel(props.exec.status))
 </script>
 
 <template>
   <div :class="['exec-card', exec.status]">
     <button class="exec-header" @click="expanded = !expanded">
       <span :class="['exec-status-dot', exec.status]" />
-      <span class="exec-action truncate">{{ exec.action }}</span>
+      <span class="exec-copy">
+        <span class="exec-action truncate">{{ meta.label }}</span>
+        <span class="exec-action-sub">{{ exec.action }} · {{ statusText }}</span>
+      </span>
       <span v-if="exec.duration" class="exec-duration">{{ exec.duration }}</span>
       <span class="exec-chevron">{{ expanded ? "▾" : "▸" }}</span>
     </button>
 
     <div v-if="expanded" class="exec-body">
+      <div class="exec-summary">{{ meta.detail }}</div>
       <div v-if="exec.input" class="exec-section">
         <span class="exec-label">输入</span>
         <pre class="exec-code">{{ exec.input }}</pre>
@@ -54,6 +61,8 @@ const expanded = ref(false)
 .exec-card.success { border-left: 3px solid #22c55e; }
 .exec-card.failed { border-left: 3px solid #ef4444; }
 .exec-card.running { border-left: 3px solid var(--accent); }
+.exec-card.denied { border-left: 3px solid #f59e0b; }
+.exec-card.needs_confirm { border-left: 3px solid #38bdf8; }
 
 .exec-header {
   display: flex;
@@ -83,6 +92,8 @@ const expanded = ref(false)
 
 .exec-status-dot.success { background: #22c55e; }
 .exec-status-dot.failed { background: #ef4444; }
+.exec-status-dot.denied { background: #f59e0b; }
+.exec-status-dot.needs_confirm { background: #38bdf8; }
 .exec-status-dot.running {
   background: var(--accent);
   animation: pulse 1.2s infinite;
@@ -94,8 +105,23 @@ const expanded = ref(false)
 }
 
 .exec-action {
-  flex: 1;
   color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.exec-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.exec-action-sub {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono);
 }
 
 .exec-duration {
@@ -112,6 +138,13 @@ const expanded = ref(false)
 .exec-body {
   border-top: 1px solid var(--border-color);
   padding: 10px 12px;
+}
+
+.exec-summary {
+  margin-bottom: 8px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
 }
 
 .exec-section {

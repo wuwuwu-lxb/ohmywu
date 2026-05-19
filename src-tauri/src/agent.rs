@@ -1,16 +1,49 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+use std::time::Instant;
 
 use futures::FutureExt;
 
 use ohmywu_domain::{chrono_now, AgentMode, RiskLevel};
-use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall};
+use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall, ToolDef};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
+use ohmywu_wiki::RecallHit;
 use tauri::Emitter;
 
 use crate::tools::{self, active_tool_defs, ExecuteRequest};
 use crate::AppState;
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentInvocationProfile {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub persona: String,
+    pub memory_scope: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryCandidateDraft {
+    pub title: String,
+    pub folder: String,
+    pub tags: Vec<String>,
+    pub body: String,
+    pub should_save: bool,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MemoryScopeConfig {
+    label: Option<String>,
+    mode: Option<String>,
+    folders: Option<Vec<String>>,
+    recall_limit: Option<usize>,
+    notes: Option<String>,
+}
 
 const SYSTEM_PROMPT: &str = "\
 你是 OhMyWu，一个帮助用户管理电脑的桌面 AI 助手。
@@ -60,10 +93,12 @@ pub async fn agent_loop(
     session_id: &str,
     turn_id: &str,
     user_message: &str,
+    agent_profile: Option<&AgentInvocationProfile>,
     llm_config: &LlmConfig,
     app_handle: Option<&tauri::AppHandle>,
 ) -> std::result::Result<AgentResponse, LlmError> {
     let provider = create_provider(llm_config)?;
+    let turn_started = Instant::now();
 
     // Step 1: Health check — fast fail if unreachable
     provider.health_check().await?;
@@ -74,10 +109,32 @@ pub async fn agent_loop(
 
     let mut executions: Vec<ExecutionRecord> = Vec::new();
     let mut last_task_id: Option<String> = None;
+    let memory_context = build_memory_context(state, agent_profile, user_message);
+
+    if let Some(handle) = app_handle
+        && let Some(memory) = &memory_context
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "memory.recalled",
+            &format!("注入 {} 条知识记忆", memory.hit_count),
+            serde_json::json!({
+                "scope": memory.scope,
+                "hitCount": memory.hit_count,
+                "hits": memory.hits,
+            }),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
 
     // build initial messages
     let mut messages: Vec<ChatMessage> = Vec::new();
-    messages.push(ChatMessage::system(&build_system_prompt(state)));
+    messages.push(ChatMessage::system(&build_system_prompt(
+        state,
+        agent_profile,
+        memory_context.as_ref(),
+    )));
 
     // include recent session history (last 20 messages)
     let history = state.session.load_session(session_id).unwrap_or_default();
@@ -112,11 +169,24 @@ pub async fn agent_loop(
             &tools,
             app_handle,
             state,
+            session_id,
+            turn_id,
+            &turn_started,
         ).await {
             Ok(ok) => ok,
             Err(LlmError::Incompatible(_)) if !tools.is_empty() => {
                 // Retry once in plain-text mode only after a real tool request fails.
-                chat_once(provider.as_ref(), &messages, &[], app_handle, state).await?
+                chat_once(
+                    provider.as_ref(),
+                    &messages,
+                    &[],
+                    app_handle,
+                    state,
+                    session_id,
+                    turn_id,
+                    &turn_started,
+                )
+                .await?
             }
             Err(err) => return Err(err),
         };
@@ -165,6 +235,24 @@ pub async fn agent_loop(
             } else {
                 "bash".to_string()
             };
+
+            if early_cache.get(&tc.id).is_none()
+                && let Some(handle) = app_handle
+                && let Ok(event) = state.runtime.record_event(
+                    session_id,
+                    Some(turn_id),
+                    "tool.started",
+                    &format!("{} 开始执行", capability),
+                    serde_json::json!({
+                        "capability": capability,
+                        "inputPreview": preview_text(&tc.function.arguments, 256),
+                        "toolCallId": tc.id,
+                        "early": false,
+                    }),
+                )
+            {
+                let _ = handle.emit("runtime-event", &event);
+            }
 
             exec_meta.push((
                 tc.id.clone(),
@@ -220,19 +308,24 @@ pub async fn agent_loop(
             messages.push(ChatMessage::tool(&tool_result, tc_id));
 
             if let Some(handle) = app_handle {
-                let _ = state.runtime.append_tool_event(session_id, turn_id, capability, &result.status);
-                let _ = handle.emit(
-                    "runtime-event",
+                if let Ok(event) = state.runtime.record_event(
+                    session_id,
+                    Some(turn_id),
+                    "tool.completed",
+                    &format!("{} -> {}", capability, result.status),
                     serde_json::json!({
-                        "kind": "tool.completed",
-                        "turnId": turn_id,
-                        "sessionId": session_id,
-                        "summary": format!("{} -> {}", capability, result.status),
                         "capability": capability,
                         "status": result.status,
-                        "timestamp": chrono_now(),
+                        "toolCallId": tc_id,
+                        "inputPreview": preview_text(input, 256),
+                        "outputPreview": preview_text(result.output.as_deref().unwrap_or(""), 512),
+                        "errorPreview": result.error.as_deref().map(|s| preview_text(s, 256)),
+                        "durationMs": result.duration_ms,
+                        "taskId": result.task_id,
                     }),
-                );
+                ) {
+                    let _ = handle.emit("runtime-event", &event);
+                }
             }
         }
     }
@@ -249,18 +342,63 @@ pub async fn agent_loop(
 async fn chat_once(
     provider: &dyn LlmProvider,
     messages: &[ChatMessage],
-    tools: &[ohmywu_llm_adapter::types::ToolDef],
+    tools: &[ToolDef],
     app_handle: Option<&tauri::AppHandle>,
     state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    turn_started: &Instant,
 ) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
     if let Some(handle) = app_handle {
-        match chat_with_streaming(provider, messages, tools, handle, state).await {
+        if let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "provider.request.started",
+            "发送流式请求",
+            serde_json::json!({
+                "messageCount": messages.len(),
+                "toolCount": tools.len(),
+                "approxContextBytes": approx_context_bytes(messages, tools),
+                "elapsedMs": turn_started.elapsed().as_millis() as u64,
+            }),
+        ) {
+            let _ = handle.emit("runtime-event", &event);
+        }
+        match chat_with_streaming(provider, messages, tools, handle, state, session_id, turn_id, turn_started).await {
             Ok(ok) => Ok(ok),
             Err(LlmError::Incompatible(_)) => Err(LlmError::Incompatible(
                 "streaming tools incompatible".into(),
             )),
             Err(_) if !tools.is_empty() => {
+                if let Ok(event) = state.runtime.record_event(
+                    session_id,
+                    Some(turn_id),
+                    "provider.request.started",
+                    "发送同步请求",
+                    serde_json::json!({
+                        "messageCount": messages.len(),
+                        "toolCount": tools.len(),
+                        "approxContextBytes": approx_context_bytes(messages, tools),
+                        "elapsedMs": turn_started.elapsed().as_millis() as u64,
+                    }),
+                ) {
+                    let _ = handle.emit("runtime-event", &event);
+                }
                 let resp = provider.chat(messages, tools).await?;
+                if resp.tool_calls.as_ref().is_some_and(|t| !t.is_empty()) {
+                    if let Ok(event) = state.runtime.record_event(
+                        session_id,
+                        Some(turn_id),
+                        "tool.call.ready",
+                        "收到工具调用",
+                        serde_json::json!({
+                            "toolCount": resp.tool_calls.as_ref().map(|t| t.len()).unwrap_or(0),
+                            "elapsedMs": turn_started.elapsed().as_millis() as u64,
+                        }),
+                    ) {
+                        let _ = handle.emit("runtime-event", &event);
+                    }
+                }
                 Ok((resp, HashMap::new()))
             }
             Err(err) => Err(err),
@@ -271,7 +409,34 @@ async fn chat_once(
     }
 }
 
-fn build_system_prompt(state: &AppState) -> String {
+struct MemoryContext {
+    scope: String,
+    hit_count: usize,
+    hits: Vec<RecallHit>,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedMemoryScope {
+    label: String,
+    mode: String,
+    folders: Vec<String>,
+    recall_limit: usize,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurnMemorySource {
+    pub turn_id: String,
+    pub user_content: String,
+    pub assistant_content: String,
+}
+
+fn build_system_prompt(
+    state: &AppState,
+    agent_profile: Option<&AgentInvocationProfile>,
+    memory_context: Option<&MemoryContext>,
+) -> String {
     let agent_mode = state
         .config
         .read()
@@ -282,7 +447,211 @@ fn build_system_prompt(state: &AppState) -> String {
         AgentMode::Agent => "当前模式：agent。你可以分步执行，但高风险 shell 操作需要先征得用户确认。",
         AgentMode::Auto => "当前模式：auto。你可以连续执行任务，但仍应保持说明清晰、避免不必要的高风险操作。",
     };
-    format!("{}\n\n{}", SYSTEM_PROMPT, mode_note)
+    let agent_note = agent_profile.map(|profile| {
+        let scope = parse_memory_scope(&profile.memory_scope);
+        format!(
+            "## 当前 Agent\n- 名称：{}\n- 角色：{}\n- 人格：{}\n- 记忆模式：{}\n- 记忆范围：{}\n- 召回上限：{}{}",
+            profile.name,
+            profile.role,
+            profile.persona,
+            human_scope_mode(&scope.mode),
+            scope.label,
+            scope.recall_limit,
+            scope
+                .notes
+                .as_ref()
+                .map(|notes| format!("\n- 记忆策略：{}", notes))
+                .unwrap_or_default()
+        )
+    });
+    let memory_note = memory_context.map(|memory| format!("## 已注入记忆\n{}", memory.text));
+
+    [Some(SYSTEM_PROMPT.to_string()), Some(mode_note.to_string()), agent_note, memory_note]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn build_memory_context(
+    state: &AppState,
+    agent_profile: Option<&AgentInvocationProfile>,
+    user_message: &str,
+) -> Option<MemoryContext> {
+    let profile = agent_profile?;
+    let scope = parse_memory_scope(&profile.memory_scope);
+    if scope.folders.is_empty() {
+        return None;
+    }
+
+    let wiki = state.wiki.read().ok()?;
+    let hits = wiki
+        .recall(user_message, &scope.folders, scope.recall_limit)
+        .ok()?;
+    if hits.is_empty() {
+        return None;
+    }
+
+    let lines = hits
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| {
+            format!(
+                "{}. [{}] {} | tags: {} | 摘要: {}",
+                index + 1,
+                hit.folder,
+                hit.title,
+                if hit.tags.is_empty() {
+                    "-".to_string()
+                } else {
+                    hit.tags.join(", ")
+                },
+                hit.snippet
+            )
+        })
+        .collect::<Vec<_>>();
+
+    Some(MemoryContext {
+        scope: scope.label,
+        hit_count: hits.len(),
+        hits,
+        text: lines.join("\n"),
+    })
+}
+
+fn parse_memory_scope(scope: &str) -> ParsedMemoryScope {
+    if let Ok(config) = serde_json::from_str::<MemoryScopeConfig>(scope) {
+        return normalize_memory_scope_config(config);
+    }
+
+    let scope_lower = scope.to_lowercase();
+    if scope_lower.trim().is_empty() || scope_lower.contains("none") || scope_lower.contains("无记忆") {
+        return ParsedMemoryScope {
+            label: "禁用长期记忆".into(),
+            mode: "none".into(),
+            folders: Vec::new(),
+            recall_limit: 4,
+            notes: None,
+        };
+    }
+
+    let mut folders = Vec::new();
+    for folder in ["concepts", "notes", "daily", "profile"] {
+        if scope_lower.contains(folder) {
+            folders.push(folder.to_string());
+        }
+    }
+
+    if scope_lower.contains("all") || scope_lower.contains("全部") {
+        folders = vec![
+            "concepts".into(),
+            "notes".into(),
+            "daily".into(),
+            "profile".into(),
+        ];
+    }
+
+    ParsedMemoryScope {
+        label: if folders.is_empty() {
+            "禁用长期记忆".into()
+        } else {
+            folders
+                .iter()
+                .map(|folder| human_folder_label(folder))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        },
+        mode: if folders.len() == 4 { "all".into() } else { "focused".into() },
+        folders,
+        recall_limit: 4,
+        notes: None,
+    }
+}
+
+fn normalize_memory_scope_config(config: MemoryScopeConfig) -> ParsedMemoryScope {
+    let mode = config.mode.unwrap_or_else(|| "focused".into());
+    let mut folders = config
+        .folders
+        .unwrap_or_default()
+        .into_iter()
+        .map(|folder| folder.trim().to_lowercase())
+        .filter(|folder| matches!(folder.as_str(), "concepts" | "notes" | "daily" | "profile"))
+        .collect::<Vec<_>>();
+    folders.sort();
+    folders.dedup();
+
+    let mode = if mode == "none" || mode == "all" || mode == "focused" {
+        mode
+    } else {
+        "focused".into()
+    };
+
+    if mode == "all" {
+        folders = vec![
+            "concepts".into(),
+            "notes".into(),
+            "daily".into(),
+            "profile".into(),
+        ];
+    }
+    if mode == "none" {
+        folders.clear();
+    }
+
+    let recall_limit = config.recall_limit.unwrap_or(4).clamp(1, 8);
+    let notes = config.notes.and_then(|notes| {
+        let trimmed = notes.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    });
+    let label = config
+        .label
+        .map(|label| label.trim().to_string())
+        .filter(|label| !label.is_empty())
+        .unwrap_or_else(|| {
+            if mode == "none" {
+                "禁用长期记忆".into()
+            } else if mode == "all" {
+                "全部知识".into()
+            } else if folders.is_empty() {
+                "定向记忆".into()
+            } else {
+                folders
+                    .iter()
+                    .map(|folder| human_folder_label(folder))
+                    .collect::<Vec<_>>()
+                    .join(" / ")
+            }
+        });
+
+    ParsedMemoryScope {
+        label,
+        mode,
+        folders,
+        recall_limit,
+        notes,
+    }
+}
+
+fn human_folder_label(folder: &str) -> String {
+    match folder {
+        "concepts" => "概念".into(),
+        "notes" => "笔记".into(),
+        "daily" => "每日".into(),
+        "profile" => "画像".into(),
+        _ => folder.to_string(),
+    }
+}
+
+fn human_scope_mode(mode: &str) -> &'static str {
+    match mode {
+        "none" => "禁用",
+        "all" => "全量",
+        _ => "定向",
+    }
 }
 
 fn augment_tool_params(
@@ -301,15 +670,177 @@ fn augment_tool_params(
     params
 }
 
+fn approx_context_bytes(messages: &[ChatMessage], tools: &[ToolDef]) -> usize {
+    serde_json::to_vec(&serde_json::json!({
+        "messages": messages,
+        "tools": tools,
+    }))
+    .map(|bytes| bytes.len())
+    .unwrap_or(0)
+}
+
+fn preview_text(value: &str, max_chars: usize) -> String {
+    let total_chars = value.chars().count();
+    if total_chars <= max_chars {
+        return value.to_string();
+    }
+    let preview: String = value.chars().take(max_chars).collect();
+    format!("{}… (+{} chars)", preview, total_chars - max_chars)
+}
+
+pub fn resolve_turn_memory_source(
+    messages: &[SessionMessage],
+    requested_turn_id: Option<&str>,
+) -> Result<TurnMemorySource, String> {
+    let turn_id = if let Some(turn_id) = requested_turn_id {
+        turn_id.to_string()
+    } else {
+        messages
+            .iter()
+            .rev()
+            .find(|msg| msg.role == "agent" && msg.turn_id.is_some())
+            .and_then(|msg| msg.turn_id.clone())
+            .ok_or_else(|| "当前会话里还没有可用于记忆沉淀的助手回复".to_string())?
+    };
+
+    let mut user_content: Option<String> = None;
+    let mut assistant_content: Option<String> = None;
+
+    for msg in messages {
+        if msg.turn_id.as_deref() != Some(turn_id.as_str()) {
+            continue;
+        }
+        if msg.role == "user" && user_content.is_none() {
+            user_content = Some(msg.content.clone());
+        }
+        if msg.role == "agent" && assistant_content.is_none() {
+            assistant_content = Some(msg.content.clone());
+        }
+    }
+
+    let user_content = user_content.ok_or_else(|| "未找到该回合对应的用户消息".to_string())?;
+    let assistant_content =
+        assistant_content.ok_or_else(|| "未找到该回合对应的助手回复".to_string())?;
+
+    Ok(TurnMemorySource {
+        turn_id,
+        user_content,
+        assistant_content,
+    })
+}
+
+pub async fn generate_memory_candidate(
+    llm_config: &LlmConfig,
+    source: &TurnMemorySource,
+) -> Result<MemoryCandidateDraft, LlmError> {
+    let provider = create_provider(llm_config)?;
+    let user_excerpt = clip_text_middle(&source.user_content, 1800);
+    let assistant_excerpt = clip_text_middle(&source.assistant_content, 4200);
+    let prompt = format!(
+        "请基于下面这一轮对话，产出一个适合写入长期知识库的记忆候选。\n\n要求：\n1. 只返回 JSON，不要 Markdown，不要解释。\n2. JSON 结构必须是：{{\"title\":\"...\",\"folder\":\"concepts|notes|daily|profile\",\"tags\":[\"...\"],\"body\":\"...\",\"shouldSave\":true,\"reason\":\"...\"}}\n3. `body` 要写成可独立阅读的中文 Markdown，避免口水话，保留真正可复用的信息。\n4. `title` 简洁明确。\n5. `tags` 2 到 6 个即可。\n6. 如果这一轮并不值得长期保存，也要返回同样结构，但将 `shouldSave` 设为 false，并在 `reason` 里说明原因。\n7. `folder` 只能从 `concepts`、`notes`、`daily`、`profile` 中选一个。\n\n[用户消息]\n{}\n\n[助手回复]\n{}",
+        user_excerpt, assistant_excerpt
+    );
+
+    let response = provider
+        .chat(
+            &[
+                ChatMessage::system(
+                    "你是一个严格的知识库整理器，负责把对话回合提炼成长期记忆候选。输出必须是可被 JSON.parse 的纯 JSON。",
+                ),
+                ChatMessage::user(&prompt),
+            ],
+            &[],
+        )
+        .await?;
+
+    let raw = response.content.unwrap_or_default();
+    parse_memory_candidate(&raw).map_err(LlmError::Protocol)
+}
+
+fn parse_memory_candidate(raw: &str) -> Result<MemoryCandidateDraft, String> {
+    let candidate_text = extract_json_object(raw)
+        .ok_or_else(|| format!("模型没有返回合法 JSON：{}", preview_text(raw, 180)))?;
+    let mut candidate: MemoryCandidateDraft = serde_json::from_str(candidate_text)
+        .map_err(|err| format!("解析记忆候选失败: {}", err))?;
+
+    candidate.title = candidate.title.trim().to_string();
+    candidate.folder = normalize_memory_folder(&candidate.folder);
+    candidate.tags = candidate
+        .tags
+        .into_iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .take(6)
+        .collect();
+    candidate.body = candidate.body.trim().to_string();
+    candidate.reason = candidate.reason.trim().to_string();
+
+    if candidate.title.is_empty() {
+        candidate.title = "未命名记忆".into();
+    }
+    if candidate.reason.is_empty() {
+        candidate.reason = if candidate.should_save {
+            "包含可复用的长期信息".into()
+        } else {
+            "信息偏临时，不建议长期沉淀".into()
+        };
+    }
+
+    Ok(candidate)
+}
+
+fn extract_json_object(raw: &str) -> Option<&str> {
+    let trimmed = raw.trim();
+    let trimmed = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .unwrap_or(trimmed)
+        .trim();
+    let trimmed = trimmed.strip_suffix("```").unwrap_or(trimmed).trim();
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    trimmed.get(start..=end)
+}
+
+fn clip_text_middle(text: &str, max_chars: usize) -> String {
+    let total = text.chars().count();
+    if total <= max_chars {
+        return text.to_string();
+    }
+
+    let head_len = max_chars * 2 / 3;
+    let tail_len = max_chars.saturating_sub(head_len + 32);
+    let head: String = text.chars().take(head_len).collect();
+    let tail: String = text
+        .chars()
+        .rev()
+        .take(tail_len)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{head}\n\n...[内容已截断，共 {total} 字]...\n\n{tail}")
+}
+
+pub fn normalize_memory_folder(folder: &str) -> String {
+    match folder.trim().to_lowercase().as_str() {
+        "concepts" | "notes" | "daily" | "profile" => folder.trim().to_lowercase(),
+        _ => "notes".into(),
+    }
+}
+
 /// Streaming chat: emit chunks via Tauri events, execute read-only tools during streaming.
 /// Returns (ChatResponse, early_cache) where early_cache maps tool_call_id → ExecuteResult
 /// for read-only tools that were executed before streaming finished.
 async fn chat_with_streaming(
     provider: &dyn LlmProvider,
     messages: &[ChatMessage],
-    tools: &[ohmywu_llm_adapter::types::ToolDef],
+    tools: &[ToolDef],
     app_handle: &tauri::AppHandle,
     state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    turn_started: &Instant,
 ) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
     use futures::StreamExt;
     use std::collections::{HashMap as StdHashMap, HashSet};
@@ -319,6 +850,8 @@ async fn chat_with_streaming(
     let mut full_reasoning = String::new();
     let mut tool_call_parts: StdHashMap<usize, ToolCall> = StdHashMap::new();
     let mut early_started: HashSet<String> = HashSet::new();
+    let mut first_token_recorded = false;
+    let mut first_tool_call_recorded = false;
 
     // Track early-executed tool calls spawned during streaming
     let mut early_handles: Vec<(String, tokio::task::JoinHandle<tools::ExecuteResult>)> = Vec::new();
@@ -326,6 +859,24 @@ async fn chat_with_streaming(
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(c) => {
+                if !first_token_recorded
+                    && (c.content_delta.is_some()
+                        || c.reasoning_delta.is_some()
+                        || c.tool_call_delta.is_some())
+                {
+                    first_token_recorded = true;
+                    if let Ok(event) = state.runtime.record_event(
+                        session_id,
+                        Some(turn_id),
+                        "provider.first_token",
+                        "收到首个流式片段",
+                        serde_json::json!({
+                            "elapsedMs": turn_started.elapsed().as_millis() as u64,
+                        }),
+                    ) {
+                        let _ = app_handle.emit("runtime-event", &event);
+                    }
+                }
                 if let Some(delta) = &c.content_delta {
                     full_content.push_str(delta);
                 }
@@ -357,6 +908,22 @@ async fn chat_with_streaming(
                     if !entry.function.name.is_empty()
                         && let Ok(params) = serde_json::from_str::<serde_json::Value>(&entry.function.arguments)
                     {
+                        if !first_tool_call_recorded {
+                            first_tool_call_recorded = true;
+                            if let Ok(event) = state.runtime.record_event(
+                                session_id,
+                                Some(turn_id),
+                                "tool.call.ready",
+                                "收到工具调用",
+                                serde_json::json!({
+                                    "capability": entry.function.name,
+                                    "toolCallId": entry.id,
+                                    "elapsedMs": turn_started.elapsed().as_millis() as u64,
+                                }),
+                            ) {
+                                let _ = app_handle.emit("runtime-event", &event);
+                            }
+                        }
                         let is_readonly = state
                             .capabilities
                             .get(&entry.function.name)
@@ -364,6 +931,20 @@ async fn chat_with_streaming(
                             .unwrap_or(false);
 
                         if is_readonly && early_started.insert(entry.id.clone()) {
+                            if let Ok(event) = state.runtime.record_event(
+                                session_id,
+                                Some(turn_id),
+                                "tool.started",
+                                &format!("{} 提前执行", entry.function.name),
+                                serde_json::json!({
+                                    "capability": entry.function.name,
+                                    "inputPreview": preview_text(&entry.function.arguments, 256),
+                                    "toolCallId": entry.id,
+                                    "early": true,
+                                }),
+                            ) {
+                                let _ = app_handle.emit("runtime-event", &event);
+                            }
                             let state_clone = state.clone();
                             let cap_name = entry.function.name.clone();
                             let tc_id = entry.id.clone();
@@ -446,10 +1027,15 @@ async fn chat_with_streaming(
 /// Save a message to the session with execution records.
 pub fn build_agent_message(
     response: &AgentResponse,
+    turn_id: &str,
+    agent_profile: Option<&AgentInvocationProfile>,
 ) -> SessionMessage {
     SessionMessage {
         role: "agent".into(),
         content: response.content.clone(),
+        agent_id: agent_profile.map(|profile| profile.id.clone()),
+        agent_name: agent_profile.map(|profile| profile.name.clone()),
+        turn_id: Some(turn_id.to_string()),
         reasoning_content: response.reasoning_content.clone(),
         executions: if response.executions.is_empty() {
             None

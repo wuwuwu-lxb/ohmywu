@@ -1,0 +1,295 @@
+<script setup lang="ts">
+import { computed, ref } from "vue"
+import ExecutionCard from "./ExecutionCard.vue"
+import type { RuntimeTurnView } from "../stores/chat"
+
+const expandedState = new Map<string, boolean>()
+
+const props = defineProps<{
+  runtime: RuntimeTurnView
+}>()
+
+const expanded = ref(
+  expandedState.get(props.runtime.turn.id) ?? props.runtime.turn.status === "running"
+)
+
+const toolCount = computed(() =>
+  props.runtime.tools.length || props.runtime.turn.executionCount
+)
+
+const elapsedLabel = computed(() => {
+  const started = Date.parse(props.runtime.turn.startedAt)
+  const finished = props.runtime.turn.finishedAt
+    ? Date.parse(props.runtime.turn.finishedAt)
+    : Date.now()
+  if (Number.isNaN(started) || Number.isNaN(finished) || finished < started) {
+    return null
+  }
+  const ms = finished - started
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+})
+
+const ttftLabel = computed(() => {
+  const event = props.runtime.events.find((item) => item.kind === "provider.first_token")
+  const elapsed = event?.payload?.elapsedMs
+  if (typeof elapsed !== "number") return null
+  if (elapsed < 1000) return `TTFT ${elapsed}ms`
+  return `TTFT ${(elapsed / 1000).toFixed(1)}s`
+})
+
+const firstToolLabel = computed(() => {
+  const event = props.runtime.events.find((item) => item.kind === "tool.call.ready")
+  const elapsed = event?.payload?.elapsedMs
+  if (typeof elapsed !== "number") return null
+  if (elapsed < 1000) return `首工具 ${elapsed}ms`
+  return `首工具 ${(elapsed / 1000).toFixed(1)}s`
+})
+
+const statusLabel = computed(() => {
+  switch (props.runtime.turn.status) {
+    case "completed":
+      return "已完成"
+    case "running":
+      return "进行中"
+    default:
+      return props.runtime.turn.status
+  }
+})
+
+const waitingLabel = computed(() => {
+  const lastEvent = props.runtime.events[props.runtime.events.length - 1]
+  if (!lastEvent) return "等待工具调用"
+  return lastEvent.summary
+})
+
+const memoryRecalls = computed(() =>
+  props.runtime.events
+    .filter((event) => event.kind === "memory.recalled")
+    .flatMap((event) => {
+      const payload = event.payload || {}
+      const hits = Array.isArray(payload.hits) ? payload.hits : []
+      return hits
+        .map((hit) => {
+          if (!hit || typeof hit !== "object") return null
+          const item = hit as Record<string, unknown>
+          return {
+            slug: typeof item.slug === "string" ? item.slug : "",
+            title: typeof item.title === "string" ? item.title : "未命名记忆",
+            folder: typeof item.folder === "string" ? item.folder : "notes",
+            snippet: typeof item.snippet === "string" ? item.snippet : "",
+          }
+        })
+        .filter(Boolean) as Array<{ slug: string, title: string, folder: string, snippet: string }>
+    })
+)
+
+const latestMemoryCandidate = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "memory.candidate.generated")
+)
+
+const latestMemorySaved = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "memory.saved")
+)
+</script>
+
+<template>
+  <div class="runtime-summary">
+    <button
+      class="runtime-toggle"
+      @click="
+        expanded = !expanded;
+        expandedState.set(runtime.turn.id, expanded)
+      "
+    >
+      <div class="runtime-copy">
+        <span class="runtime-title">Runtime</span>
+        <span class="runtime-pill">{{ statusLabel }}</span>
+        <span class="runtime-meta">{{ toolCount }} 个工具</span>
+        <span v-if="elapsedLabel" class="runtime-meta">{{ elapsedLabel }}</span>
+        <span v-if="ttftLabel" class="runtime-meta">{{ ttftLabel }}</span>
+        <span v-if="firstToolLabel" class="runtime-meta">{{ firstToolLabel }}</span>
+      </div>
+      <span class="runtime-chevron">{{ expanded ? "▾" : "▸" }}</span>
+    </button>
+
+    <div v-if="expanded" class="runtime-body">
+      <div v-if="memoryRecalls.length" class="memory-recall-list">
+        <div class="runtime-section-title">记忆召回</div>
+        <div
+          v-for="memory in memoryRecalls"
+          :key="`${runtime.turn.id}-${memory.slug}-${memory.title}`"
+          class="memory-recall-card"
+        >
+          <div class="memory-recall-top">
+            <span class="memory-folder">{{ memory.folder }}</span>
+            <span class="memory-title-line">{{ memory.title }}</span>
+          </div>
+          <div class="memory-snippet">{{ memory.snippet }}</div>
+        </div>
+      </div>
+
+      <div v-if="latestMemoryCandidate || latestMemorySaved" class="memory-runtime-meta">
+        <div v-if="latestMemoryCandidate" class="memory-runtime-line">
+          <span class="runtime-section-title inline">记忆候选</span>
+          <span>{{ latestMemoryCandidate.summary }}</span>
+        </div>
+        <div v-if="latestMemorySaved" class="memory-runtime-line">
+          <span class="runtime-section-title inline">知识库写入</span>
+          <span>{{ latestMemorySaved.summary }}</span>
+        </div>
+      </div>
+
+      <div v-if="runtime.tools.length" class="runtime-tools">
+        <ExecutionCard
+          v-for="(tool, index) in runtime.tools"
+          :key="`${runtime.turn.id}-${index}`"
+          :exec="tool"
+        />
+      </div>
+      <div v-else class="runtime-empty">{{ waitingLabel }}</div>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.runtime-summary {
+  margin-top: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  border-radius: 16px;
+  background: rgba(var(--accent-rgb), 0.04);
+  overflow: hidden;
+}
+
+.runtime-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.runtime-toggle:hover {
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.runtime-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.runtime-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-secondary);
+}
+
+.runtime-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  font-size: 11px;
+  color: var(--text-primary);
+}
+
+.runtime-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.runtime-chevron {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.runtime-body {
+  border-top: 1px solid rgba(var(--accent-rgb), 0.08);
+  padding: 0 10px 10px;
+}
+
+.runtime-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.runtime-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.runtime-section-title.inline {
+  min-width: 72px;
+}
+
+.memory-recall-list {
+  margin-top: 10px;
+}
+
+.memory-recall-card,
+.memory-runtime-meta {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.1);
+  background: rgba(var(--accent-rgb), 0.04);
+}
+
+.memory-recall-top,
+.memory-runtime-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.memory-folder {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+}
+
+.memory-title-line {
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.memory-snippet {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.runtime-empty {
+  padding: 12px 4px 2px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+</style>

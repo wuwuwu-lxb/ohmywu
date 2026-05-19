@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct NoteMeta {
     pub slug: String,
     pub title: String,
+    pub folder: String,
     pub tags: Vec<String>,
     pub created: String,
     pub updated: String,
@@ -22,6 +23,7 @@ pub struct NoteMeta {
 pub struct WikiNote {
     pub slug: String,
     pub title: String,
+    pub folder: String,
     pub tags: Vec<String>,
     pub created: String,
     pub updated: String,
@@ -54,8 +56,20 @@ pub struct GraphEdge {
 pub struct IndexEntry {
     pub slug: String,
     pub title: String,
+    pub folder: String,
     pub tags: Vec<String>,
     pub updated: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecallHit {
+    pub slug: String,
+    pub title: String,
+    pub folder: String,
+    pub tags: Vec<String>,
+    pub updated: String,
+    pub score: usize,
+    pub snippet: String,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -122,6 +136,7 @@ impl WikiEngine {
                 notes.push(NoteMeta {
                     slug: note.slug,
                     title: note.title,
+                    folder: note.folder,
                     tags: note.tags,
                     created: note.created,
                     updated: note.updated,
@@ -184,6 +199,7 @@ impl WikiEngine {
         Ok(WikiNote {
             slug,
             title: title.to_string(),
+            folder: dir.to_string(),
             tags: tags.to_vec(),
             created,
             updated,
@@ -238,6 +254,7 @@ impl WikiEngine {
                         NoteMeta {
                             slug: note.slug,
                             title: note.title,
+                            folder: note.folder,
                             tags: note.tags,
                             created: note.created,
                             updated: note.updated,
@@ -302,6 +319,64 @@ impl WikiEngine {
         Ok(GraphData { nodes, edges })
     }
 
+    pub fn recall(
+        &self,
+        query: &str,
+        folders: &[String],
+        limit: usize,
+    ) -> Result<Vec<RecallHit>, String> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let folder_set: HashSet<String> = folders.iter().map(|folder| folder.to_lowercase()).collect();
+        let mut hits = Vec::new();
+
+        self.walk_md_files(&self.root.clone(), &mut |path| {
+            if let Ok(note) = self.read_note_file(path) {
+                if !folder_set.is_empty() && !folder_set.contains(&note.folder.to_lowercase()) {
+                    return;
+                }
+
+                let title_lower = note.title.to_lowercase();
+                let body_lower = note.body.to_lowercase();
+                let mut score = 0usize;
+
+                if title_lower.contains(&q) {
+                    score += 100;
+                    if title_lower == q {
+                        score += 50;
+                    }
+                }
+                for tag in &note.tags {
+                    if tag.to_lowercase().contains(&q) {
+                        score += 30;
+                    }
+                }
+                score += body_lower.matches(&q).count() * 2;
+
+                if score == 0 {
+                    return;
+                }
+
+                hits.push(RecallHit {
+                    slug: note.slug,
+                    title: note.title,
+                    folder: note.folder,
+                    tags: note.tags,
+                    updated: note.updated,
+                    score,
+                    snippet: build_snippet(&note.body, &q, 220),
+                });
+            }
+        })?;
+
+        hits.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| b.updated.cmp(&a.updated)));
+        hits.truncate(limit);
+        Ok(hits)
+    }
+
     // ── Helpers ───────────────────────────────────────────────────
 
     fn read_note_file(&self, path: &Path) -> Result<WikiNote, String> {
@@ -319,6 +394,7 @@ impl WikiEngine {
         Ok(WikiNote {
             slug,
             title: fm.title,
+            folder: self.folder_for_path(path),
             tags: fm.tags,
             created: fm.created.unwrap_or_else(ohmywu_domain::chrono_now),
             updated: fm.updated.unwrap_or_else(ohmywu_domain::chrono_now),
@@ -398,6 +474,7 @@ impl WikiEngine {
                     notes.push(IndexEntry {
                         slug: note.slug,
                         title: note.title,
+                        folder: note.folder,
                         tags: note.tags,
                         updated: note.updated,
                     });
@@ -410,9 +487,10 @@ impl WikiEngine {
         let mut index = String::from("# 知识库索引\n\n");
         for entry in &notes {
             index.push_str(&format!(
-                "- [{}]({})\n  - 标签: {}\n  - 更新: {}\n\n",
+                "- [{}]({})\n  - 范围: {}\n  - 标签: {}\n  - 更新: {}\n\n",
                 entry.title,
                 entry.slug,
+                entry.folder,
                 entry.tags.join(", "),
                 entry.updated,
             ));
@@ -421,6 +499,15 @@ impl WikiEngine {
         let path = self.root.join("index.md");
         fs::write(&path, index).map_err(|e| format!("write index.md: {}", e))?;
         Ok(())
+    }
+
+    fn folder_for_path(&self, path: &Path) -> String {
+        path.strip_prefix(&self.root)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .and_then(|component| component.as_os_str().to_str())
+            .unwrap_or("notes")
+            .to_string()
     }
 }
 
@@ -487,6 +574,25 @@ pub fn extract_links(body: &str) -> Vec<String> {
 }
 
 // ── Utilities ──────────────────────────────────────────────────────
+
+fn build_snippet(body: &str, query_lower: &str, max_chars: usize) -> String {
+    let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let collapsed_lower = collapsed.to_lowercase();
+    if let Some(index) = collapsed_lower.find(query_lower) {
+        let start = index.saturating_sub(max_chars / 3);
+        let end = (index + query_lower.len() + (max_chars * 2 / 3)).min(collapsed.len());
+        let prefix = if start > 0 { "…" } else { "" };
+        let suffix = if end < collapsed.len() { "…" } else { "" };
+        return format!("{}{}{}", prefix, &collapsed[start..end], suffix);
+    }
+
+    let snippet: String = collapsed.chars().take(max_chars).collect();
+    if collapsed.chars().count() > max_chars {
+        format!("{}…", snippet)
+    } else {
+        snippet
+    }
+}
 
 /// Convert a title/name into a file-system-safe slug.
 fn slugify(input: &str) -> String {
@@ -657,5 +763,39 @@ With multiple lines.
 
         engine.delete_note("test-note").unwrap();
         assert!(engine.read_note("test-note").is_err());
+    }
+
+    #[test]
+    fn test_recall_scoped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let engine = WikiEngine::new(tmp.path().to_path_buf());
+        engine.init().unwrap();
+
+        engine
+            .write_note(
+                "rust-memory",
+                "Rust Memory",
+                "Rust 的所有权和内存模型非常关键。",
+                &["rust".into()],
+                "concepts",
+            )
+            .unwrap();
+        engine
+            .write_note(
+                "personal-memory",
+                "Personal Memory",
+                "我喜欢把知识沉淀进知识库。",
+                &["profile".into()],
+                "profile",
+            )
+            .unwrap();
+
+        let concept_hits = engine.recall("内存", &["concepts".into()], 5).unwrap();
+        assert_eq!(concept_hits.len(), 1);
+        assert_eq!(concept_hits[0].folder, "concepts");
+
+        let profile_hits = engine.recall("知识库", &["profile".into()], 5).unwrap();
+        assert_eq!(profile_hits.len(), 1);
+        assert_eq!(profile_hits[0].folder, "profile");
     }
 }

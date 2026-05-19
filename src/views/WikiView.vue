@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from "vue"
+import { ref, computed, onMounted, nextTick } from "vue"
 import { useWikiStore, type GraphData } from "../stores/wiki"
 
 const store = useWikiStore()
 const searchInput = ref("")
 const graphCanvas = ref<HTMLCanvasElement>()
+const folderFilter = ref<"all" | "concepts" | "notes" | "daily" | "profile">("all")
 
 let searchTimer: ReturnType<typeof setTimeout> | null = null
+
+const FOLDER_LABELS: Record<string, string> = {
+  all: "全部",
+  concepts: "概念",
+  notes: "笔记",
+  daily: "每日",
+  profile: "画像",
+}
 
 onMounted(async () => {
   await store.loadNotes()
@@ -22,6 +31,34 @@ const onSearchInput = () => {
 const openNote = (slug: string) => {
   store.selectNote(slug)
 }
+
+const folderStats = computed(() =>
+  ["concepts", "notes", "daily", "profile"].map((folder) => ({
+    key: folder,
+    label: FOLDER_LABELS[folder],
+    count: store.notes.filter((note) => note.folder === folder).length,
+  }))
+)
+
+const filteredNotes = computed(() =>
+  folderFilter.value === "all"
+    ? store.notes
+    : store.notes.filter((note) => note.folder === folderFilter.value)
+)
+
+const filteredSearchResults = computed(() =>
+  folderFilter.value === "all"
+    ? store.searchResults
+    : store.searchResults.filter((note) => note.folder === folderFilter.value)
+)
+
+const availableTags = computed(() => {
+  const set = new Set<string>()
+  for (const note of filteredNotes.value) {
+    for (const tag of note.tags) set.add(tag)
+  }
+  return [...set].sort()
+})
 
 // ── Markdown rendering ─────────────────────────────────────────────
 
@@ -254,15 +291,6 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   }
 }
 
-// ── Tags filter ────────────────────────────────────────────────────
-
-const uniqueTags = () => {
-  const s = new Set<string>()
-  for (const n of store.notes) {
-    for (const t of n.tags) s.add(t)
-  }
-  return [...s].sort()
-}
 </script>
 
 <template>
@@ -279,6 +307,27 @@ const uniqueTags = () => {
     <div class="wiki-body">
       <!-- List View -->
       <div v-if="store.viewMode === 'list'" class="list-panel">
+        <div class="scope-grid">
+          <button
+            :class="['scope-card', { active: folderFilter === 'all' }]"
+            @click="folderFilter = 'all'"
+          >
+            <span class="scope-label">全部范围</span>
+            <strong class="scope-value">{{ store.notes.length }}</strong>
+            <span class="scope-note">当前知识库所有条目</span>
+          </button>
+          <button
+            v-for="scope in folderStats"
+            :key="scope.key"
+            :class="['scope-card', { active: folderFilter === scope.key }]"
+            @click="folderFilter = scope.key as 'concepts' | 'notes' | 'daily' | 'profile'"
+          >
+            <span class="scope-label">{{ scope.label }}</span>
+            <strong class="scope-value">{{ scope.count }}</strong>
+            <span class="scope-note">可作为后续 agent 记忆范围</span>
+          </button>
+        </div>
+
         <div class="search-box">
           <input
             v-model="searchInput"
@@ -290,16 +339,17 @@ const uniqueTags = () => {
           <span v-if="store.loading" class="search-spinner" />
         </div>
 
-        <div v-if="store.searchQuery && store.searchResults.length" class="note-list">
+        <div v-if="store.searchQuery && filteredSearchResults.length" class="note-list">
           <h3 class="section-title">搜索结果</h3>
           <button
-            v-for="n in store.searchResults"
+            v-for="n in filteredSearchResults"
             :key="n.slug"
             class="note-card"
             @click="openNote(n.slug)"
           >
             <div class="note-title">{{ n.title }}</div>
             <div class="note-meta">
+              <span class="scope-pill">{{ FOLDER_LABELS[n.folder] || n.folder }}</span>
               <span v-for="t in n.tags" :key="t" class="tag">{{ t }}</span>
               <span class="note-date">{{ n.updated.slice(0, 10) }}</span>
             </div>
@@ -307,25 +357,26 @@ const uniqueTags = () => {
         </div>
 
         <div v-if="!searchInput" class="note-list">
-          <div v-if="uniqueTags().length" class="tag-bar">
-            <span v-for="t in uniqueTags()" :key="t" class="tag clickable" @click="searchInput = t; store.search(t)">
+          <div v-if="availableTags.length" class="tag-bar">
+            <span v-for="t in availableTags" :key="t" class="tag clickable" @click="searchInput = t; store.search(t)">
               {{ t }}
             </span>
           </div>
-          <h3 class="section-title">最近更新</h3>
+          <h3 class="section-title">最近更新 · {{ FOLDER_LABELS[folderFilter] }}</h3>
           <button
-            v-for="n in store.notes"
+            v-for="n in filteredNotes"
             :key="n.slug"
             class="note-card"
             @click="openNote(n.slug)"
           >
             <div class="note-title">{{ n.title }}</div>
             <div class="note-meta">
+              <span class="scope-pill">{{ FOLDER_LABELS[n.folder] || n.folder }}</span>
               <span v-for="t in n.tags" :key="t" class="tag">{{ t }}</span>
               <span class="note-date">{{ n.updated.slice(0, 10) }}</span>
             </div>
           </button>
-          <p v-if="!store.notes.length && !store.loading" class="empty-hint">
+          <p v-if="!filteredNotes.length && !store.loading" class="empty-hint">
             还没有笔记。在对话中让 agent 帮你记录知识，或者 agent 会自动发现知识点。
           </p>
         </div>
@@ -339,6 +390,7 @@ const uniqueTags = () => {
           <header class="article-header">
             <h1>{{ store.current.title }}</h1>
             <div class="article-meta">
+              <span class="scope-pill">{{ FOLDER_LABELS[store.current.folder] || store.current.folder }}</span>
               <span v-for="t in store.current.tags" :key="t" class="tag">{{ t }}</span>
               <span class="note-date">更新于 {{ store.current.updated.slice(0, 10) }}</span>
             </div>
@@ -423,6 +475,56 @@ const uniqueTags = () => {
 }
 
 /* search */
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.scope-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  background: var(--surface-1);
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--duration-fast);
+  box-shadow: var(--shadow-surface);
+}
+
+.scope-card:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+  border-color: rgba(var(--accent-rgb), 0.18);
+  transform: translateY(-1px);
+}
+
+.scope-card.active {
+  border-color: rgba(var(--accent-rgb), 0.24);
+  background: rgba(var(--accent-rgb), 0.09);
+}
+
+.scope-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.scope-value {
+  font-size: 20px;
+  color: var(--text-primary);
+}
+
+.scope-note {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -454,13 +556,22 @@ const uniqueTags = () => {
 
 /* tags */
 .tag-bar { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.scope-pill,
 .tag {
   padding: 2px 10px;
   border-radius: 10px;
-  background: var(--accent-soft);
-  color: var(--accent);
   font-size: 12px;
   font-weight: 500;
+}
+
+.tag {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.scope-pill {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
 }
 .tag.clickable { cursor: pointer; transition: all var(--duration-fast); }
 .tag.clickable:hover { background: var(--accent); color: var(--text-on-accent); }
@@ -602,4 +713,10 @@ const uniqueTags = () => {
 .graph-hint { text-align: center; font-size: 12px; color: var(--text-tertiary); }
 
 .empty-hint { color: var(--text-tertiary); font-size: 14px; padding: 32px 0; text-align: center; }
+
+@media (max-width: 768px) {
+  .scope-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

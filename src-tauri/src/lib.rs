@@ -3,6 +3,7 @@ mod config;
 mod data_dir;
 mod permission;
 mod runtime;
+mod skills;
 mod tools;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,7 +75,7 @@ impl AppState {
         // register initial capabilities
         register_capabilities(&capabilities);
         // register initial actions
-        register_actions(&actions);
+        refresh_action_registry(&actions);
 
         Self {
             capabilities,
@@ -166,10 +167,43 @@ fn register_capabilities(registry: &CapabilityRegistry) {
     ));
 }
 
-fn register_actions(registry: &ActionRegistry) {
-    registry.register(Action::new("shell.exec", "Execute a shell command"));
-    registry.register(Action::new("fs.read", "Read a file"));
-    registry.register(Action::new("system.info", "Get system information"));
+fn builtin_actions() -> Vec<Action> {
+    vec![
+        Action::builtin(
+            "shell.exec",
+            "终端执行",
+            "稳定的 shell 执行入口，适合命令运行、构建检查和系统探测。",
+            &["bash"],
+            &["builtin", "terminal", "execution"],
+        ),
+        Action::builtin(
+            "fs.read",
+            "文件读取",
+            "稳定的文件读取入口，聚合本地文件浏览、全文检索和文件发现。",
+            &["read", "glob", "grep"],
+            &["builtin", "filesystem", "readonly"],
+        ),
+        Action::builtin(
+            "wiki.memory",
+            "知识记忆",
+            "稳定的知识库入口，聚合 wiki 检索、读取和写入，用于长期记忆与知识沉淀。",
+            &["wiki_search", "wiki_read", "wiki_write", "wiki_list", "wiki_graph"],
+            &["builtin", "memory", "wiki"],
+        ),
+        Action::builtin(
+            "plan.track",
+            "计划跟踪",
+            "稳定的计划与执行跟踪入口，适合记录思考和生成 checklist。",
+            &["thinking", "checklist_write"],
+            &["builtin", "planning", "runtime"],
+        ),
+    ]
+}
+
+fn refresh_action_registry(registry: &ActionRegistry) {
+    let mut items = builtin_actions();
+    items.extend(skills::discover_skill_actions());
+    registry.replace_all(items);
 }
 
 // ── Tauri Commands: queries ──────────────────────────────────────
@@ -182,6 +216,24 @@ fn get_capabilities(state: tauri::State<AppState>) -> Vec<Capability> {
 #[tauri::command]
 fn get_actions(state: tauri::State<AppState>) -> Vec<Action> {
     state.actions.list()
+}
+
+#[tauri::command]
+fn refresh_actions(state: tauri::State<AppState>) -> Result<Vec<Action>, String> {
+    refresh_action_registry(&state.actions);
+    Ok(state.actions.list())
+}
+
+#[tauri::command]
+fn get_action_blueprint(
+    action_id: String,
+    state: tauri::State<AppState>,
+) -> Result<skills::ActionBlueprint, String> {
+    let action = state
+        .actions
+        .get(&action_id)
+        .ok_or_else(|| format!("action '{}' 未注册", action_id))?;
+    skills::build_action_blueprint(&action)
 }
 
 #[tauri::command]
@@ -299,6 +351,7 @@ fn cancel_agent(state: tauri::State<'_, AppState>) -> Result<(), String> {
 async fn send_message(
     session_id: String,
     content: String,
+    agent_profile: Option<agent::AgentInvocationProfile>,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<SessionMessage, String> {
@@ -314,11 +367,16 @@ async fn send_message(
     let _ = app_handle.emit(
         "runtime-event",
         serde_json::json!({
+            "sessionId": session_id,
             "kind": "turn.started",
             "turnId": turn.id,
-            "sessionId": session_id,
             "summary": "开始新回合",
-            "agentMode": agent_mode,
+            "status": "running",
+            "payload": {
+              "agentMode": agent_mode,
+              "userContent": content,
+              "agentName": agent_profile.as_ref().map(|profile| profile.name.clone()),
+            },
             "timestamp": now,
         }),
     );
@@ -327,6 +385,9 @@ async fn send_message(
     let user_msg = SessionMessage {
         role: "user".into(),
         content: content.clone(),
+        agent_id: agent_profile.as_ref().map(|profile| profile.id.clone()),
+        agent_name: agent_profile.as_ref().map(|profile| profile.name.clone()),
+        turn_id: Some(turn.id.clone()),
         reasoning_content: None,
         executions: None,
         task_id: None,
@@ -347,6 +408,7 @@ async fn send_message(
             &session_id,
             &turn.id,
             &content,
+            agent_profile.as_ref(),
             &llm_config,
             Some(&app_handle),
         )
@@ -433,7 +495,7 @@ async fn send_message(
         }
     };
 
-    let agent_msg = agent::build_agent_message(&agent_response);
+    let agent_msg = agent::build_agent_message(&agent_response, &turn.id, agent_profile.as_ref());
     state.session.append_message(&session_id, &agent_msg)?;
     let completed_turn = state.runtime.finish_turn(
         &session_id,
@@ -444,16 +506,117 @@ async fn send_message(
     let _ = app_handle.emit(
         "runtime-event",
         serde_json::json!({
+            "sessionId": session_id,
             "kind": "turn.completed",
             "turnId": completed_turn.id,
-            "sessionId": session_id,
             "summary": format!("回合完成，执行 {} 个工具", completed_turn.execution_count),
             "status": completed_turn.status,
+            "payload": {
+              "executionCount": completed_turn.execution_count,
+              "assistantContent": agent_response.content,
+            },
             "timestamp": completed_turn.finished_at,
         }),
     );
 
     Ok(agent_msg)
+}
+
+#[tauri::command]
+async fn generate_memory_candidate(
+    session_id: String,
+    turn_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<agent::MemoryCandidateDraft, String> {
+    let source = {
+        let messages = state.session.load_session(&session_id)?;
+        agent::resolve_turn_memory_source(&messages, turn_id.as_deref())?
+    };
+
+    let llm_config = {
+        let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
+        cfg_guard
+            .llm_provider
+            .clone()
+            .ok_or_else(|| "当前未配置模型，无法生成记忆候选".to_string())?
+    };
+
+    let candidate = agent::generate_memory_candidate(&llm_config, &source)
+        .await
+        .map_err(|err| format!("生成记忆候选失败: {}", err))?;
+
+    if let Ok(event) = state.runtime.record_event(
+        &session_id,
+        Some(&source.turn_id),
+        "memory.candidate.generated",
+        if candidate.should_save {
+            "已生成记忆候选"
+        } else {
+            "已生成候选，但建议忽略"
+        },
+        serde_json::json!({
+            "title": candidate.title,
+            "folder": candidate.folder,
+            "tags": candidate.tags,
+            "shouldSave": candidate.should_save,
+            "reason": candidate.reason,
+        }),
+    ) {
+        let _ = app_handle.emit("runtime-event", &event);
+    }
+
+    Ok(candidate)
+}
+
+#[tauri::command]
+fn save_memory_candidate(
+    session_id: String,
+    turn_id: Option<String>,
+    candidate: agent::MemoryCandidateDraft,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<ohmywu_wiki::WikiNote, String> {
+    let title = candidate.title.trim();
+    let body = candidate.body.trim();
+    if title.is_empty() {
+        return Err("记忆标题不能为空".into());
+    }
+    if body.is_empty() {
+        return Err("记忆正文不能为空".into());
+    }
+
+    let folder = agent::normalize_memory_folder(&candidate.folder);
+    let tags = candidate
+        .tags
+        .into_iter()
+        .map(|tag| tag.trim().to_string())
+        .filter(|tag| !tag.is_empty())
+        .collect::<Vec<_>>();
+
+    let note = {
+        let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+        wiki.write_note(title, title, body, &tags, &folder)?
+    };
+
+    if let Some(turn_id) = turn_id.as_deref()
+        && let Ok(event) = state.runtime.record_event(
+            &session_id,
+            Some(turn_id),
+            "memory.saved",
+            "已写入知识库",
+            serde_json::json!({
+                "slug": note.slug,
+                "title": note.title,
+                "folder": note.folder,
+                "tags": note.tags,
+            }),
+        )
+    {
+        let _ = app_handle.emit("runtime-event", &event);
+    }
+
+    Ok(note)
 }
 
 fn parse_read_cmd(input: &str) -> Option<&str> {
@@ -736,6 +899,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_capabilities,
             get_actions,
+            refresh_actions,
+            get_action_blueprint,
             get_policy_mode,
             get_agent_mode,
             get_tasks,
@@ -758,6 +923,8 @@ pub fn run() {
             save_background_file,
             get_background_path,
             clear_background_file,
+            generate_memory_candidate,
+            save_memory_candidate,
             wiki_list_notes,
             wiki_read_note,
             wiki_search_notes,

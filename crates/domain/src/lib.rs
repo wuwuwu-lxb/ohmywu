@@ -22,14 +22,96 @@ impl Capability {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
     pub id: String,
+    pub title: String,
     pub description: String,
+    pub source: ActionSource,
+    pub capabilities: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    pub available: bool,
 }
 
 impl Action {
     pub fn new(id: &str, description: &str) -> Self {
         Self {
             id: id.to_string(),
+            title: id.to_string(),
             description: description.to_string(),
+            source: ActionSource::Builtin,
+            capabilities: Vec::new(),
+            tags: Vec::new(),
+            path: None,
+            entry: None,
+            available: true,
+        }
+    }
+
+    pub fn builtin(
+        id: &str,
+        title: &str,
+        description: &str,
+        capabilities: &[&str],
+        tags: &[&str],
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            source: ActionSource::Builtin,
+            capabilities: capabilities.iter().map(|item| item.to_string()).collect(),
+            tags: tags.iter().map(|item| item.to_string()).collect(),
+            path: None,
+            entry: None,
+            available: true,
+        }
+    }
+
+    pub fn skill(
+        id: &str,
+        title: &str,
+        description: &str,
+        path: &str,
+        entry: &str,
+        tags: &[String],
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            source: ActionSource::Skill,
+            capabilities: Vec::new(),
+            tags: tags.to_vec(),
+            path: Some(path.to_string()),
+            entry: Some(entry.to_string()),
+            available: true,
+        }
+    }
+
+    pub fn sort_key(&self) -> (u8, String, String) {
+        let source_rank = match self.source {
+            ActionSource::Builtin => 0,
+            ActionSource::Skill => 1,
+        };
+        (source_rank, self.title.to_lowercase(), self.id.to_lowercase())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActionSource {
+    Builtin,
+    Skill,
+}
+
+impl ActionSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Builtin => "builtin",
+            Self::Skill => "skill",
         }
     }
 }

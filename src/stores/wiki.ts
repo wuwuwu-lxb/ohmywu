@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core"
 export interface NoteMeta {
   slug: string
   title: string
+  folder: string
   tags: string[]
   created: string
   updated: string
@@ -15,6 +16,7 @@ export interface NoteMeta {
 export interface WikiNote {
   slug: string
   title: string
+  folder: string
   tags: string[]
   created: string
   updated: string

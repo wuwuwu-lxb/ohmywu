@@ -54,6 +54,7 @@ pub struct ChecklistSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeEvent {
     pub id: String,
+    pub session_id: String,
     pub thread_id: String,
     pub turn_id: Option<String>,
     pub kind: String,
@@ -114,19 +115,16 @@ impl RuntimeStore {
         thread.last_turn_id = Some(turn.id.clone());
         self.write_thread(&thread)?;
 
-        self.append_event(RuntimeEvent {
-            id: unique_id("evt"),
-            thread_id: thread.id.clone(),
-            turn_id: Some(turn.id.clone()),
-            kind: "turn.started".into(),
-            summary: "开始新回合".into(),
-            payload: serde_json::json!({
-                "sessionId": session_id,
+        let _ = self.record_event(
+            session_id,
+            Some(&turn.id),
+            "turn.started",
+            "开始新回合",
+            serde_json::json!({
                 "agentMode": turn.agent_mode,
                 "userContent": turn.user_content,
             }),
-            timestamp: chrono_now(),
-        })?;
+        )?;
 
         Ok(turn)
     }
@@ -152,18 +150,16 @@ impl RuntimeStore {
         thread.last_turn_id = Some(turn.id.clone());
         self.write_thread(&thread)?;
 
-        self.append_event(RuntimeEvent {
-            id: unique_id("evt"),
-            thread_id: thread.id,
-            turn_id: Some(turn.id.clone()),
-            kind: "turn.completed".into(),
-            summary: format!("回合完成，执行 {} 个工具", execution_count),
-            payload: serde_json::json!({
+        let _ = self.record_event(
+            session_id,
+            Some(&turn.id),
+            "turn.completed",
+            &format!("回合完成，执行 {} 个工具", execution_count),
+            serde_json::json!({
                 "assistantContent": assistant_content,
                 "executionCount": execution_count,
             }),
-            timestamp: chrono_now(),
-        })?;
+        )?;
 
         Ok(turn)
     }
@@ -175,19 +171,17 @@ impl RuntimeStore {
         capability: &str,
         status: &str,
     ) -> Result<(), String> {
-        let thread = self.ensure_thread(session_id)?;
-        self.append_event(RuntimeEvent {
-            id: unique_id("evt"),
-            thread_id: thread.id,
-            turn_id: Some(turn_id.to_string()),
-            kind: "tool.completed".into(),
-            summary: format!("{} -> {}", capability, status),
-            payload: serde_json::json!({
+        let _ = self.record_event(
+            session_id,
+            Some(turn_id),
+            "tool.completed",
+            &format!("{} -> {}", capability, status),
+            serde_json::json!({
                 "capability": capability,
                 "status": status,
             }),
-            timestamp: chrono_now(),
-        })
+        )?;
+        Ok(())
     }
 
     pub fn write_checklist(
@@ -213,16 +207,13 @@ impl RuntimeStore {
         turn.checklist_count = snapshot.items.len();
         self.write_turn(&turn)?;
 
-        let thread = self.ensure_thread(session_id)?;
-        self.append_event(RuntimeEvent {
-            id: unique_id("evt"),
-            thread_id: thread.id,
-            turn_id: Some(turn_id.to_string()),
-            kind: "checklist.updated".into(),
-            summary: format!("更新 checklist（{} 项）", snapshot.items.len()),
-            payload: serde_json::to_value(&snapshot).map_err(|e| format!("Checklist value: {}", e))?,
-            timestamp: chrono_now(),
-        })?;
+        let _ = self.record_event(
+            session_id,
+            Some(turn_id),
+            "checklist.updated",
+            &format!("更新 checklist（{} 项）", snapshot.items.len()),
+            serde_json::to_value(&snapshot).map_err(|e| format!("Checklist value: {}", e))?,
+        )?;
 
         Ok(snapshot)
     }
@@ -273,6 +264,29 @@ impl RuntimeStore {
         }
 
         Ok(())
+    }
+
+    pub fn record_event(
+        &self,
+        session_id: &str,
+        turn_id: Option<&str>,
+        kind: &str,
+        summary: &str,
+        payload: serde_json::Value,
+    ) -> Result<RuntimeEvent, String> {
+        let thread = self.ensure_thread(session_id)?;
+        let event = RuntimeEvent {
+            id: unique_id("evt"),
+            session_id: session_id.to_string(),
+            thread_id: thread.id,
+            turn_id: turn_id.map(|id| id.to_string()),
+            kind: kind.to_string(),
+            summary: summary.to_string(),
+            payload,
+            timestamp: chrono_now(),
+        };
+        self.append_event(event.clone())?;
+        Ok(event)
     }
 
     fn ensure_thread(&self, session_id: &str) -> Result<RuntimeThread, String> {
