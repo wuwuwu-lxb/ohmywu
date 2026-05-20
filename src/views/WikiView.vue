@@ -950,7 +950,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  background: rgba(8, 10, 14, 0.18);
+  background: var(--surface-1);
 }
 
 .wiki-title {
@@ -1042,7 +1042,6 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .scope-card.active {
   background: rgba(var(--accent-rgb), 0.06);
   border-color: rgba(var(--accent-rgb), 0.18);
-  transform: translateY(-1px);
 }
 
 .scope-label {
@@ -1199,7 +1198,6 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .note-card:hover {
   background: rgba(var(--accent-rgb), 0.06);
   border-color: rgba(var(--accent-rgb), 0.18);
-  transform: translateY(-1px);
 }
 
 .note-card.small {
@@ -1266,6 +1264,8 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   display: grid;
   grid-template-columns: minmax(0, 1fr) 280px;
   gap: 18px;
+  align-items: start;
+  min-height: 0;
 }
 
 .note-article,
@@ -1283,7 +1283,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .editor-panel,
 .preview-panel,
 .graph-sidebar {
-  background: rgba(9, 11, 15, 0.62);
+  background: var(--surface-1);
 }
 
 .note-article {
@@ -1368,6 +1368,10 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .editor-panel,
 .preview-panel {
   padding: 18px;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .editor-grid {
@@ -1388,11 +1392,12 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 }
 
 .editor-textarea {
-  min-height: 420px;
+  height: clamp(340px, 58vh, 760px);
   padding: 14px;
-  resize: vertical;
+  resize: none;
   font-size: 14px;
   line-height: 1.7;
+  overflow-y: auto;
 }
 
 .link-suggest-panel {
@@ -1415,7 +1420,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-2);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1451,7 +1456,10 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 }
 
 .preview-body {
-  min-height: 480px;
+  flex: 1;
+  min-height: 0;
+  height: clamp(340px, 58vh, 760px);
+  overflow-y: auto;
 }
 
 .danger-banner,
@@ -1483,9 +1491,9 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 }
 
 .graph-panel {
-  min-height: 680px;
+  height: clamp(420px, 72vh, 860px);
   overflow: hidden;
-  background: rgba(9, 11, 15, 0.62);
+  background: var(--surface-1);
 }
 
 .graph-canvas {

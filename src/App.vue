@@ -114,7 +114,6 @@ onMounted(async () => {
       v-if="backgroundMode === 'image'"
       class="background-container"
     >
-      <div class="background-ambient" />
       <div
         class="background-media"
         :style="{
@@ -192,13 +191,6 @@ onMounted(async () => {
   pointer-events: none;
 }
 
-.background-ambient {
-  position: absolute;
-  inset: 0;
-  background: rgba(6, 8, 12, 0.18);
-  animation: ambientPulse 12s ease-in-out infinite;
-}
-
 .background-media {
   position: absolute;
   inset: 0;
@@ -227,8 +219,7 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--shell-bg);
-  animation: fadeIn 0.5s 0.1s var(--ease-out) both;
+  background: transparent;
 }
 
 .topbar {
@@ -239,8 +230,7 @@ onMounted(async () => {
   gap: 16px;
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--shell-bg-soft);
-  backdrop-filter: blur(14px);
+  background: var(--surface-1);
 }
 
 .topbar-left {
@@ -270,7 +260,6 @@ onMounted(async () => {
 .topbar-chip:hover {
   background: var(--surface-2);
   color: var(--text-primary);
-  transform: translateY(-1px);
 }
 
 .topbar-title h1 {
@@ -293,16 +282,6 @@ onMounted(async () => {
   min-height: 0;
   padding: 0 24px 0;
   overflow: hidden;
-}
-
-@keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-@keyframes ambientPulse {
-  0%, 100% { opacity: 0.78; }
-  50% { opacity: 0.96; }
 }
 
 .panel-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }

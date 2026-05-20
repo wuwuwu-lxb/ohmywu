@@ -16,7 +16,9 @@ const categoryInput = ref("")
 const renameDrafts = ref<Record<string, string>>({})
 const categoryDrafts = ref<Record<string, string>>({})
 const confirmingDeleteId = ref<string | null>(null)
+const confirmingDeleteCategory = ref<string | null>(null)
 const sessionBusyId = ref<string | null>(null)
+const categoryBusyName = ref<string | null>(null)
 const sessionActionMsg = ref("")
 const inputFocused = ref(false)
 const composing = ref(false)
@@ -25,6 +27,13 @@ const llmProfiles = ref<Array<{ id: string; name: string; provider_type: string;
 const llmProviders = ref<Array<{ id: string; name: string }>>([])
 const deleteSessionTarget = computed(() =>
   store.sessions.find((session) => session.id === confirmingDeleteId.value) || null
+)
+const deleteCategorySessionCount = computed(() =>
+  confirmingDeleteCategory.value
+    ? store.sessions.filter(
+      (session) => (session.category || "").trim() === confirmingDeleteCategory.value
+    ).length
+    : 0
 )
 
 const emit = defineEmits<{
@@ -83,18 +92,21 @@ const categoryTabs = computed(() => {
       label: "全部对话",
       note: "查看全部会话",
       count: store.sessions.length,
+      deletable: false,
     },
     {
       id: "__uncategorized__",
       label: "未分类",
       note: "暂未归档",
       count: uncategorizedCount,
+      deletable: false,
     },
     ...store.sessionCategories.map((category) => ({
       id: category,
       label: category,
       note: "自定义分类",
       count: store.sessions.filter((session) => (session.category || "").trim() === category).length,
+      deletable: true,
     })),
   ]
 })
@@ -350,6 +362,10 @@ const addCategory = () => {
   sessionActionMsg.value = `已切换到分类「${trimmed}」`
 }
 
+const toggleDeleteCategory = (name: string) => {
+  confirmingDeleteCategory.value = confirmingDeleteCategory.value === name ? null : name
+}
+
 const toggleDelete = (id: string) => {
   confirmingDeleteId.value = confirmingDeleteId.value === id ? null : id
 }
@@ -371,6 +387,22 @@ const confirmDeleteSession = async (id: string) => {
 const confirmDeleteCurrentSession = async () => {
   if (!confirmingDeleteId.value) return
   await confirmDeleteSession(confirmingDeleteId.value)
+}
+
+const confirmDeleteCurrentCategory = async () => {
+  if (!confirmingDeleteCategory.value) return
+  const name = confirmingDeleteCategory.value
+  categoryBusyName.value = name
+  sessionActionMsg.value = ""
+  try {
+    await store.removeCustomCategory(name)
+    confirmingDeleteCategory.value = null
+    sessionActionMsg.value = `分类「${name}」已删除`
+  } catch (error) {
+    sessionActionMsg.value = String(error)
+  } finally {
+    categoryBusyName.value = null
+  }
 }
 
 const applySlashSuggestion = (value?: string) => {
@@ -438,18 +470,30 @@ onMounted(async () => {
         <div class="manager-card">
           <div class="manager-card-title">分类</div>
           <div class="category-list">
-            <button
+            <div
               v-for="tab in categoryTabs"
               :key="tab.id"
-              :class="['category-item', { active: store.selectedCategory === tab.id }]"
-              @click="store.setSelectedCategory(tab.id)"
+              class="category-row"
             >
-              <div>
-                <div class="category-label">{{ tab.label }}</div>
-                <div class="category-note">{{ tab.note }}</div>
-              </div>
-              <span class="category-count">{{ tab.count }}</span>
-            </button>
+              <button
+                :class="['category-item', { active: store.selectedCategory === tab.id }]"
+                @click="store.setSelectedCategory(tab.id)"
+              >
+                <div>
+                  <div class="category-label">{{ tab.label }}</div>
+                  <div class="category-note">{{ tab.note }}</div>
+                </div>
+                <span class="category-count">{{ tab.count }}</span>
+              </button>
+              <button
+                v-if="tab.deletable"
+                class="category-delete"
+                :disabled="categoryBusyName === tab.label"
+                @click="toggleDeleteCategory(tab.label)"
+              >
+                删除
+              </button>
+            </div>
           </div>
         </div>
 
@@ -693,6 +737,15 @@ onMounted(async () => {
       @cancel="confirmingDeleteId = null"
       @confirm="confirmDeleteCurrentSession"
     />
+
+    <ConfirmDialog
+      :open="!!confirmingDeleteCategory"
+      title="删除对话分类"
+      :message="confirmingDeleteCategory ? `确定删除分类「${confirmingDeleteCategory}」吗？${deleteCategorySessionCount ? `该分类下的 ${deleteCategorySessionCount} 个对话会被移动到未分类。` : '该分类下当前没有对话。'}` : '删除后该分类下的对话会被移动到未分类。'"
+      :loading="!!(confirmingDeleteCategory && categoryBusyName === confirmingDeleteCategory)"
+      @cancel="confirmingDeleteCategory = null"
+      @confirm="confirmDeleteCurrentCategory"
+    />
   </div>
 </template>
 
@@ -748,18 +801,6 @@ onMounted(async () => {
 }
 
 .msg-animate {
-  animation: fadeRise 0.42s var(--ease-out) both;
-}
-
-@keyframes fadeRise {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
 }
 
 .session-manager {
@@ -811,8 +852,14 @@ onMounted(async () => {
   gap: 8px;
 }
 
+.category-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
 .category-item {
-  width: 100%;
+  flex: 1;
   padding: 12px 14px;
   border-radius: 16px;
   border: 1px solid var(--border-color);
@@ -852,6 +899,30 @@ onMounted(async () => {
   background: rgba(255, 255, 255, 0.04);
   font-size: 11px;
   font-family: var(--font-mono);
+}
+
+.category-delete {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 9px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 96, 96, 0.16);
+  background: rgba(255, 96, 96, 0.08);
+  color: #ffc7c7;
+  font-size: 12px;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: background var(--duration-fast), border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.category-delete:hover:not(:disabled) {
+  background: rgba(255, 96, 96, 0.12);
+  border-color: rgba(255, 96, 96, 0.24);
+}
+
+.category-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .category-create {
@@ -1058,7 +1129,6 @@ onMounted(async () => {
   border-radius: 24px;
   background: var(--surface-1);
   box-shadow: var(--shadow-float);
-  animation: cardFloatIn 0.55s var(--ease-out) both;
 }
 
 .empty-main-card {
@@ -1086,8 +1156,7 @@ onMounted(async () => {
   content: "";
   position: absolute;
   inset: -40%;
-  background: linear-gradient(115deg, transparent 25%, rgba(255, 255, 255, 0.12) 50%, transparent 75%);
-  animation: sheenSweep 5.4s linear infinite;
+  background: linear-gradient(115deg, transparent 25%, rgba(255, 255, 255, 0.06) 50%, transparent 75%);
 }
 
 .empty-cover-mark {
@@ -1453,26 +1522,24 @@ onMounted(async () => {
   gap: 6px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.06);
-  animation: fadeRise 0.2s var(--ease-out) both;
 }
 
 .slash-item {
   width: 100%;
   border: 1px solid transparent;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-2);
   padding: 10px 12px;
   text-align: left;
   color: inherit;
   cursor: pointer;
-  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+  transition: border-color 140ms ease, background 140ms ease;
 }
 
 .slash-item:hover,
 .slash-item.active {
   border-color: rgba(var(--accent-rgb), 0.18);
   background: rgba(var(--accent-rgb), 0.08);
-  transform: translateY(-1px);
 }
 
 .slash-label {
@@ -1510,10 +1577,9 @@ onMounted(async () => {
 }
 
 .send-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
   background: rgba(var(--accent-rgb), 0.18);
   border-color: rgba(var(--accent-rgb), 0.28);
-  box-shadow: 0 10px 30px rgba(var(--accent-rgb), 0.22);
+  box-shadow: var(--shadow-surface);
 }
 
 .send-btn:disabled,
@@ -1540,26 +1606,6 @@ onMounted(async () => {
 @keyframes spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes cardFloatIn {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-@keyframes sheenSweep {
-  0% {
-    transform: translateX(-55%) translateY(-10%) rotate(8deg);
-  }
-  100% {
-    transform: translateX(60%) translateY(10%) rotate(8deg);
   }
 }
 

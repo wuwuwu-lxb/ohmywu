@@ -1,4 +1,4 @@
-# OhMyWu 首个版本发布清单
+# OhMyWu 发布清单
 
 > 最后更新：2026-05-20
 
@@ -17,10 +17,9 @@
 - `src-tauri/Cargo.toml`
 - 根目录 `Cargo.toml`（如果需要对 workspace 版本做说明）
 
-建议首个可测试版本使用：
+当前建议发布版本：
 
-- `0.1.0`
-- 或 `0.1.0-beta.1`
+- `0.2.0`
 
 ## 3. 本地构建发布包
 
@@ -43,14 +42,14 @@ npm run tauri build
 ```bash
 git status
 git add <需要提交的文件>
-git commit -m "release: prepare v0.1.0"
+git commit -m "release: prepare v0.2.0"
 git push
 ```
 
 ## 5. GitHub Release 建议
 
-1. 打 tag：`git tag v0.1.0`
-2. 推送 tag：`git push origin v0.1.0`
+1. 打 tag：`git tag v0.2.0`
+2. 推送 tag：`git push origin v0.2.0`
 3. 在 GitHub 新建 Release
 4. 上传 `bundle/` 里的安装包
 5. 补一段 release note
@@ -62,7 +61,7 @@ git push
 - 已知限制
 - 下一阶段方向
 
-## 7. 当前首版更适合定义为
+## 7. 当前版本更适合定义为
 
 - 内测版
 - 预览版

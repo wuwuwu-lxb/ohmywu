@@ -4,12 +4,6 @@ import { invoke } from "@tauri-apps/api/core"
 import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
 
-interface ProviderInfo {
-  id: string
-  name: string
-  apiFormat: string
-}
-
 interface LlmConfig {
   provider_type: string
   api_format: string
@@ -35,18 +29,6 @@ interface AppConfig {
   llm_provider: LlmConfig | null
 }
 
-const PROVIDER_ENDPOINTS: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
-  anthropic: "https://api.anthropic.com",
-  deepseek: "https://api.deepseek.com",
-  gemini: "https://generativelanguage.googleapis.com",
-  ollama: "http://localhost:11434",
-  moonshot: "https://api.moonshot.cn/v1",
-  zhipu: "https://open.bigmodel.cn/api/paas/v4",
-  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  minimax: "https://api.minimaxi.com/v1",
-}
-
 const API_FORMAT_OPTIONS = [
   { label: "OpenAI Chat", value: "openai_chat" },
   { label: "OpenAI Responses", value: "openai_responses" },
@@ -56,7 +38,6 @@ const API_FORMAT_OPTIONS = [
 ]
 
 const pageEl = ref<HTMLElement | null>(null)
-const providers = ref<ProviderInfo[]>([])
 const llmEnabled = ref(false)
 const llmProfiles = ref<LlmProfile[]>([])
 const activeLlmProfileId = ref<string | null>(null)
@@ -65,7 +46,6 @@ const profileDraft = ref<LlmProfile | null>(null)
 const fetchedModels = ref<Record<string, LlmModelOption[]>>({})
 const fetchingModels = ref(false)
 const deleteProfileId = ref<string | null>(null)
-const endpointPresetId = ref("")
 const configSaving = ref(false)
 const configMsg = ref("")
 const testingConnection = ref(false)
@@ -81,22 +61,12 @@ const activeProfile = computed(() =>
   llmProfiles.value.find((profile) => profile.id === activeLlmProfileId.value) || null
 )
 const apiFormatOptions = computed(() => API_FORMAT_OPTIONS)
-const endpointPresetOptions = computed(() =>
-  providers.value.map((provider) => ({
-    label: `${provider.name} · ${defaultEndpointFor(provider.id)}`,
-    value: provider.id,
-  }))
-)
 const selectedFetchedModelOptions = computed(() =>
   ((profileDraft.value && fetchedModels.value[profileDraft.value.id]) || []).map((item) => ({
     label: item.label,
     value: item.id,
   }))
 )
-
-function defaultEndpointFor(id: string) {
-  return PROVIDER_ENDPOINTS[id] ?? ""
-}
 
 function needsKeyFor(id: string) {
   return id !== "ollama"
@@ -145,7 +115,6 @@ function ensureEditingProfile() {
 
 function syncProfileDraft() {
   profileDraft.value = selectedProfile.value ? cloneProfile(selectedProfile.value) : null
-  endpointPresetId.value = ""
 }
 
 function mergedProfiles() {
@@ -230,14 +199,6 @@ function updateSelectedProfileApiFormat(value: string | number) {
   profileDraft.value.api_format = String(value)
 }
 
-async function applyEndpointPreset(value: string | number) {
-  const providerId = String(value)
-  endpointPresetId.value = providerId
-  const endpoint = defaultEndpointFor(providerId)
-  if (!endpoint || !profileDraft.value) return
-  profileDraft.value.endpoint = endpoint
-}
-
 async function fetchModelsForSelectedProfile() {
   if (!profileDraft.value) return
   fetchingModels.value = true
@@ -281,7 +242,6 @@ function normalizedProfiles() {
 
 async function loadSettings() {
   const cfg = await invoke<AppConfig>("get_config")
-  providers.value = await invoke<ProviderInfo[]>("get_llm_providers")
 
   llmProfiles.value = (cfg.llm_profiles || []).map((profile) => ({
     ...cloneProfile(profile),
@@ -289,7 +249,6 @@ async function loadSettings() {
   llmEnabled.value = !!cfg.active_llm_profile_id
   activeLlmProfileId.value = cfg.active_llm_profile_id || null
   editingLlmProfileId.value = cfg.active_llm_profile_id || llmProfiles.value[0]?.id || ""
-  endpointPresetId.value = ""
   ensureEditingProfile()
   syncProfileDraft()
 }
@@ -452,17 +411,6 @@ watch(
             :model-value="profileDraft.api_format"
             :options="apiFormatOptions"
             @update:model-value="updateSelectedProfileApiFormat"
-          />
-        </div>
-
-        <div class="field-group">
-          <label class="field-label">地址预设</label>
-          <ThemeSelect
-            class="form-input provider-select"
-            :model-value="endpointPresetId"
-            :options="endpointPresetOptions"
-            placeholder="只辅助填写 endpoint"
-            @update:model-value="applyEndpointPreset"
           />
         </div>
 
@@ -634,7 +582,7 @@ watch(
   padding: 14px 16px;
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface-1);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -642,14 +590,13 @@ watch(
   gap: 14px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .model-profile-card:hover,
 .model-profile-card.active {
   border-color: rgba(var(--accent-rgb), 0.22);
   background: rgba(var(--accent-rgb), 0.08);
-  transform: translateY(-1px);
 }
 
 .model-profile-main {

@@ -747,13 +747,12 @@ onMounted(async () => {
   border: 1px solid var(--border-color);
   background: var(--surface-1);
   box-shadow: var(--shadow-surface);
-  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .tool-card:hover {
   border-color: rgba(var(--accent-rgb), 0.18);
   background: var(--surface-2);
-  transform: translateY(-1px);
 }
 
 .tool-top {
@@ -820,7 +819,7 @@ onMounted(async () => {
 }
 
 .pill.stat {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-2);
 }
 
 .pill.ok {

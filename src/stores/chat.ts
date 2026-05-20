@@ -751,6 +751,30 @@ export const useChatStore = defineStore("chat", () => {
     setSelectedCategory(trimmed)
   }
 
+  async function removeCustomCategory(name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+
+    const affectedSessions = sessions.value.filter(
+      (session) => (session.category || "").trim() === trimmed
+    )
+
+    if (affectedSessions.length) {
+      await Promise.all(
+        affectedSessions.map((session) => updateSessionMeta(session.id, { category: "" }))
+      )
+    }
+
+    if (customCategories.value.includes(trimmed)) {
+      customCategories.value = customCategories.value.filter((category) => category !== trimmed)
+      persistArray(CHAT_CUSTOM_CATEGORIES_KEY, customCategories.value)
+    }
+
+    if (selectedCategory.value === trimmed) {
+      setSelectedCategory(affectedSessions.length ? "__uncategorized__" : "all")
+    }
+  }
+
   async function sendMessage(
     content: string,
     agentProfile?: AgentProfile,
@@ -983,6 +1007,7 @@ export const useChatStore = defineStore("chat", () => {
     setPanel,
     setSelectedCategory,
     addCustomCategory,
+    removeCustomCategory,
     sendMessage,
     setAgentMode,
     cancelAgent,

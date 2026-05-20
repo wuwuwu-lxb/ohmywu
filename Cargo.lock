@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -2246,7 +2246,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-action-registry"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-audit"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-capability-registry"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2270,7 +2270,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-domain"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "serde",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-llm-adapter"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -2292,7 +2292,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-policy-engine"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2300,7 +2300,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-session"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2309,7 +2309,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-task-engine"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "ohmywu-wiki"
-version = "0.1.0-beta.1"
+version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
