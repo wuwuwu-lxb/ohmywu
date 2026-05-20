@@ -225,6 +225,17 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   border-radius: 16px;
   background: rgba(var(--accent-rgb), 0.04);
   overflow: hidden;
+  position: relative;
+}
+
+.runtime-summary::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(120deg, transparent 20%, rgba(255, 255, 255, 0.06) 50%, transparent 80%);
+  transform: translateX(-120%);
+  opacity: 0;
 }
 
 .runtime-toggle {
@@ -239,10 +250,17 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
+  transition: background 160ms ease, transform 160ms ease;
 }
 
 .runtime-toggle:hover {
   background: rgba(var(--accent-rgb), 0.05);
+  transform: translateY(-1px);
+}
+
+.runtime-summary:hover::before {
+  opacity: 1;
+  animation: runtimeSweep 1.6s ease;
 }
 
 .runtime-copy {
@@ -280,11 +298,37 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   color: var(--text-tertiary);
   font-size: 10px;
   flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+
+.runtime-summary:hover .runtime-chevron {
+  transform: translateX(1px);
 }
 
 .runtime-body {
   border-top: 1px solid rgba(var(--accent-rgb), 0.08);
   padding: 0 10px 10px;
+  animation: runtimeBodyIn 0.2s var(--ease-out) both;
+}
+
+@keyframes runtimeSweep {
+  from {
+    transform: translateX(-120%);
+  }
+  to {
+    transform: translateX(120%);
+  }
+}
+
+@keyframes runtimeBodyIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .runtime-tools {

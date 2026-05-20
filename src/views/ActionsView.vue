@@ -312,8 +312,12 @@ onMounted(loadActions)
 .actions-view {
   padding: 28px 32px 32px;
   max-width: 1060px;
+  width: 100%;
   height: 100%;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
 
 .section-head,
@@ -450,10 +454,6 @@ onMounted(loadActions)
   gap: 12px;
 }
 
-.action-card {
-  background: rgba(var(--accent-rgb), 0.03);
-}
-
 .action-id {
   display: block;
   margin-bottom: 8px;
@@ -531,7 +531,7 @@ onMounted(loadActions)
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-2);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -551,7 +551,8 @@ onMounted(loadActions)
   padding: 16px;
   border-radius: 18px;
   border: 1px solid rgba(var(--accent-rgb), 0.16);
-  background: rgba(var(--accent-rgb), 0.04);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-surface);
 }
 
 .blueprint-empty,
@@ -568,8 +569,8 @@ onMounted(loadActions)
   margin: 12px 0 0;
   padding: 14px;
   border-radius: 16px;
-  background: rgba(0, 0, 0, 0.24);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--surface-2);
+  border: 1px solid var(--border-color);
   color: var(--text-primary);
   font-size: 12px;
   line-height: 1.7;

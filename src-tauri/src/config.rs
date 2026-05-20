@@ -121,6 +121,17 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
+    pub fn llm_config_by_id(&self, profile_id: &str) -> Option<LlmConfig> {
+        let trimmed = profile_id.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        self.llm_profiles
+            .iter()
+            .find(|item| item.id == trimmed)
+            .map(|item| item.config.clone())
+    }
+
     pub fn active_llm_config(&self) -> Option<LlmConfig> {
         if let Some(active_id) = &self.active_llm_profile_id {
             if let Some(profile) = self.llm_profiles.iter().find(|item| &item.id == active_id) {

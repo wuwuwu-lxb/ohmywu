@@ -2221,6 +2221,7 @@ dependencies = [
 name = "ohmywu"
 version = "0.1.0-beta.1"
 dependencies = [
+ "chrono",
  "dirs",
  "futures",
  "glob",

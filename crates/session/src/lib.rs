@@ -161,6 +161,26 @@ impl SessionManager {
         Ok(messages)
     }
 
+    pub fn session_exists(&self, session_id: &str) -> bool {
+        self.file_path(session_id).exists() || self.meta_path(session_id).exists()
+    }
+
+    pub fn get_session_summary(&self, session_id: &str) -> Result<Option<SessionSummary>, String> {
+        if !self.session_exists(session_id) {
+            return Ok(None);
+        }
+        let (message_count, created_at, updated_at) = self.scan_summary(session_id)?;
+        let meta = self.load_or_init_meta(session_id, &created_at, &updated_at)?;
+        Ok(Some(SessionSummary {
+            id: session_id.to_string(),
+            name: meta.name,
+            category: meta.category,
+            message_count,
+            created_at: meta.created_at,
+            updated_at: meta.updated_at,
+        }))
+    }
+
     pub fn list_sessions(&self) -> Result<Vec<SessionSummary>, String> {
         let mut summaries = Vec::new();
         let entries = fs::read_dir(&self.sessions_dir)

@@ -485,6 +485,7 @@ onMounted(async () => {
 .atomic-view {
   padding: 28px 32px 32px;
   max-width: 1120px;
+  width: 100%;
   height: 100%;
   overflow-y: auto;
   display: flex;
@@ -579,7 +580,7 @@ onMounted(async () => {
 }
 
 .ghost-btn {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-2);
 }
 
 .panel {
@@ -652,7 +653,8 @@ onMounted(async () => {
   padding: 18px;
   border-radius: 20px;
   border: 1px solid rgba(var(--accent-rgb), 0.18);
-  background: rgba(var(--accent-rgb), 0.04);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-surface);
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -681,7 +683,7 @@ onMounted(async () => {
   padding: 0 14px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-2);
   color: var(--text-primary);
 }
 
@@ -709,13 +711,13 @@ onMounted(async () => {
   padding: 3px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--surface-2);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .toggle-btn.active {
-  background: rgba(var(--accent-rgb), 0.18);
+  background: rgba(var(--accent-rgb), 0.14);
   border-color: rgba(var(--accent-rgb), 0.26);
 }
 
@@ -743,14 +745,14 @@ onMounted(async () => {
   padding: 16px;
   border-radius: 18px;
   border: 1px solid var(--border-color);
-  background: rgba(var(--accent-rgb), 0.03);
+  background: var(--surface-1);
   box-shadow: var(--shadow-surface);
   transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
 }
 
 .tool-card:hover {
   border-color: rgba(var(--accent-rgb), 0.18);
-  background: rgba(var(--accent-rgb), 0.05);
+  background: var(--surface-2);
   transform: translateY(-1px);
 }
 
@@ -846,7 +848,7 @@ onMounted(async () => {
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--surface-2);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;

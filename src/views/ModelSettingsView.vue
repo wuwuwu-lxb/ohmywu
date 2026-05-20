@@ -630,6 +630,7 @@ watch(
 
 .model-profile-card {
   width: 100%;
+  min-width: 0;
   padding: 14px 16px;
   border: 1px solid var(--border-color);
   border-radius: 16px;
@@ -652,6 +653,7 @@ watch(
 }
 
 .model-profile-main {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -659,6 +661,9 @@ watch(
   color: var(--text-primary);
   font-size: 14px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-profile-meta {
@@ -666,6 +671,9 @@ watch(
   color: var(--text-secondary);
   font-size: 12px;
   font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .model-profile-badge,
@@ -679,6 +687,7 @@ watch(
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-mono);
+  max-width: 100%;
 }
 
 .status-chip.active,
@@ -795,9 +804,13 @@ watch(
 }
 
 .msg {
+  flex: 1 1 240px;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--text-secondary);
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .msg.error {

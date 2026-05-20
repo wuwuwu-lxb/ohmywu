@@ -14,6 +14,7 @@ import AtomicCapabilitiesView from "./views/AtomicCapabilitiesView.vue"
 import AuditView from "./views/AuditView.vue"
 import ModelSettingsView from "./views/ModelSettingsView.vue"
 import SettingsView from "./views/SettingsView.vue"
+import WechatBridgeView from "./views/WechatBridgeView.vue"
 import WikiView from "./views/WikiView.vue"
 import type { Component } from "vue"
 
@@ -36,6 +37,7 @@ const viewMap: Record<string, Component> = {
   agents: markRaw(AgentManagementView),
   wiki: markRaw(WikiView),
   models: markRaw(ModelSettingsView),
+  wechat: markRaw(WechatBridgeView),
   atomic: markRaw(AtomicCapabilitiesView),
   actions: markRaw(ActionsView),
   audit: markRaw(AuditView),
@@ -98,6 +100,7 @@ onMounted(async () => {
   register({ id: "agents", label: "Agent 管理", icon: "🧠" })
   register({ id: "wiki", label: "知识库", icon: "📖" })
   register({ id: "models", label: "模型设置", icon: "◌" })
+  register({ id: "wechat", label: "微信接入", icon: "◉" })
   register({ id: "atomic", label: "原子化能力", icon: "⚙" })
   register({ id: "actions", label: "Action 注册", icon: "⚡" })
   register({ id: "audit", label: "审计日志", icon: "📋" })
@@ -193,6 +196,7 @@ onMounted(async () => {
   position: absolute;
   inset: 0;
   background: rgba(6, 8, 12, 0.18);
+  animation: ambientPulse 12s ease-in-out infinite;
 }
 
 .background-media {
@@ -236,6 +240,7 @@ onMounted(async () => {
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
   background: var(--shell-bg-soft);
+  backdrop-filter: blur(14px);
 }
 
 .topbar-left {
@@ -265,6 +270,7 @@ onMounted(async () => {
 .topbar-chip:hover {
   background: var(--surface-2);
   color: var(--text-primary);
+  transform: translateY(-1px);
 }
 
 .topbar-title h1 {
@@ -292,6 +298,11 @@ onMounted(async () => {
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@keyframes ambientPulse {
+  0%, 100% { opacity: 0.78; }
+  50% { opacity: 0.96; }
 }
 
 .panel-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }

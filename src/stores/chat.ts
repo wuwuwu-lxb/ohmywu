@@ -90,6 +90,12 @@ interface StreamChunk {
   done: boolean
 }
 
+interface SessionUpdatedEvent {
+  sessionId?: string
+  turnId?: string
+  source?: string
+}
+
 interface RuntimeTurn {
   id: string
   threadId: string
@@ -321,6 +327,7 @@ export const useChatStore = defineStore("chat", () => {
 
   let unlistenStream: UnlistenFn | null = null
   let unlistenRuntime: UnlistenFn | null = null
+  let unlistenSessionUpdated: UnlistenFn | null = null
 
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value)
@@ -573,6 +580,15 @@ export const useChatStore = defineStore("chat", () => {
       if (!unlistenRuntime) {
         unlistenRuntime = await listen<RuntimeEvent>("runtime-event", (event) => {
           handleRuntimeEvent(event.payload)
+        })
+      }
+      if (!unlistenSessionUpdated) {
+        unlistenSessionUpdated = await listen<SessionUpdatedEvent>("session-updated", async (event) => {
+          const payload = event.payload || {}
+          await refreshSessions()
+          if (payload.sessionId && payload.sessionId === currentSessionId.value) {
+            await loadSession(payload.sessionId)
+          }
         })
       }
       const list = await invoke<SessionSummary[]>("list_sessions")

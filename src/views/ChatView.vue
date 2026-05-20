@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue"
+import { invoke } from "@tauri-apps/api/core"
 import ChatMessage from "../components/ChatMessage.vue"
 import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
@@ -19,6 +20,9 @@ const sessionBusyId = ref<string | null>(null)
 const sessionActionMsg = ref("")
 const inputFocused = ref(false)
 const composing = ref(false)
+const slashIndex = ref(0)
+const llmProfiles = ref<Array<{ id: string; name: string; provider_type: string; model: string }>>([])
+const llmProviders = ref<Array<{ id: string; name: string }>>([])
 const deleteSessionTarget = computed(() =>
   store.sessions.find((session) => session.id === confirmingDeleteId.value) || null
 )
@@ -121,11 +125,78 @@ const agentOptions = computed(() =>
   }))
 )
 
+const slashSuggestions = computed(() => {
+  const raw = input.value.trimStart()
+  if (!raw.startsWith("/")) return []
+  const text = raw.slice(1)
+  const [command = "", ...rest] = text.split(/\s+/)
+  const arg = rest.join(" ").trim().toLowerCase()
+
+  if (!command) {
+    return [
+      { label: "/profile", description: "切换当前模型配置", insert: "/profile " },
+      { label: "/profiles", description: "查看全部模型配置", insert: "/profiles" },
+      { label: "/provider", description: "切换当前 provider", insert: "/provider " },
+      { label: "/model", description: "切换当前 model", insert: "/model " },
+    ]
+  }
+
+  if ("profiles".startsWith(command.toLowerCase())) {
+    return [{ label: "/profiles", description: "查看全部模型配置", insert: "/profiles" }]
+  }
+
+  if ("profile".startsWith(command.toLowerCase())) {
+    return llmProfiles.value
+      .filter((profile) =>
+        !arg
+        || profile.id.toLowerCase().includes(arg)
+        || profile.name.toLowerCase().includes(arg)
+      )
+      .slice(0, 8)
+      .map((profile) => ({
+        label: `/profile ${profile.id}`,
+        description: `${profile.name} · ${profile.provider_type} · ${profile.model}`,
+        insert: `/profile ${profile.id}`,
+      }))
+  }
+
+  if ("provider".startsWith(command.toLowerCase())) {
+    return llmProviders.value
+      .filter((provider) =>
+        !arg
+        || provider.id.toLowerCase().includes(arg)
+        || provider.name.toLowerCase().includes(arg)
+      )
+      .slice(0, 8)
+      .map((provider) => ({
+        label: `/provider ${provider.id}`,
+        description: provider.name,
+        insert: `/provider ${provider.id}`,
+      }))
+  }
+
+  if ("model".startsWith(command.toLowerCase())) {
+    return [...new Set(llmProfiles.value.map((profile) => profile.model).filter(Boolean))]
+      .filter((model) => !arg || model.toLowerCase().includes(arg))
+      .slice(0, 8)
+      .map((model) => ({
+        label: `/model ${model}`,
+        description: "切换当前配置的模型名",
+        insert: `/model ${model}`,
+      }))
+  }
+
+  return []
+})
+
 const send = async () => {
   const text = input.value.trim()
   if (!text || store.pending) return
   input.value = ""
   await store.sendMessage(text, effectiveAgent.value, agentStore.availableAgents)
+  if (text.startsWith("/")) {
+    await loadCommandContext()
+  }
   syncInputHeight()
   scroll()
 }
@@ -146,6 +217,26 @@ const handleKeydown = (e: KeyboardEvent) => {
   if (e.isComposing || composing.value) {
     return
   }
+  if (slashSuggestions.value.length) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      slashIndex.value = (slashIndex.value + 1) % slashSuggestions.value.length
+      return
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault()
+      slashIndex.value = (slashIndex.value - 1 + slashSuggestions.value.length) % slashSuggestions.value.length
+      return
+    }
+    if (e.key === "Tab") {
+      e.preventDefault()
+      applySlashSuggestion(slashSuggestions.value[slashIndex.value]?.insert)
+      return
+    }
+    if (e.key === "Escape") {
+      slashIndex.value = 0
+    }
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault()
     send()
@@ -153,6 +244,9 @@ const handleKeydown = (e: KeyboardEvent) => {
 }
 
 const handleInput = () => {
+  if (slashIndex.value >= slashSuggestions.value.length) {
+    slashIndex.value = 0
+  }
   syncInputHeight()
 }
 
@@ -279,6 +373,33 @@ const confirmDeleteCurrentSession = async () => {
   await confirmDeleteSession(confirmingDeleteId.value)
 }
 
+const applySlashSuggestion = (value?: string) => {
+  if (!value) return
+  input.value = value
+  syncInputHeight()
+  nextTick(() => inputEl.value?.focus())
+}
+
+const loadCommandContext = async () => {
+  try {
+    const [config, providers] = await Promise.all([
+      invoke<{
+        llm_profiles?: Array<{
+          id: string
+          name: string
+          provider_type: string
+          model: string
+        }>
+      }>("get_config"),
+      invoke<Array<{ id: string; name: string }>>("get_llm_providers"),
+    ])
+    llmProfiles.value = config.llm_profiles || []
+    llmProviders.value = providers || []
+  } catch (error) {
+    console.error("Load command context:", error)
+  }
+}
+
 watch(
   () => store.sessions,
   (sessions) => syncSessionDrafts(sessions),
@@ -301,6 +422,7 @@ watch(input, () => {
 onMounted(async () => {
   await agentStore.init()
   await store.init()
+  await loadCommandContext()
   await nextTick()
   syncInputHeight()
   if (store.panel === "conversation") {
@@ -532,6 +654,18 @@ onMounted(async () => {
               @compositionend="handleCompositionEnd"
               @keydown="handleKeydown"
             />
+            <div v-if="slashSuggestions.length" class="slash-panel">
+              <button
+                v-for="(item, index) in slashSuggestions"
+                :key="item.label"
+                type="button"
+                :class="['slash-item', { active: index === slashIndex }]"
+                @mousedown.prevent="applySlashSuggestion(item.insert)"
+              >
+                <span class="slash-label">{{ item.label }}</span>
+                <span class="slash-desc">{{ item.description }}</span>
+              </button>
+            </div>
           </div>
 
           <div class="composer-actions">
@@ -614,17 +748,17 @@ onMounted(async () => {
 }
 
 .msg-animate {
-  animation: fadeUp 0.3s var(--ease-out) both;
+  animation: fadeRise 0.42s var(--ease-out) both;
 }
 
-@keyframes fadeUp {
+@keyframes fadeRise {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(14px) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
@@ -924,6 +1058,7 @@ onMounted(async () => {
   border-radius: 24px;
   background: var(--surface-1);
   box-shadow: var(--shadow-float);
+  animation: cardFloatIn 0.55s var(--ease-out) both;
 }
 
 .empty-main-card {
@@ -943,6 +1078,16 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   box-shadow: var(--shadow-glow);
+  position: relative;
+  overflow: hidden;
+}
+
+.empty-cover::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background: linear-gradient(115deg, transparent 25%, rgba(255, 255, 255, 0.12) 50%, transparent 75%);
+  animation: sheenSweep 5.4s linear infinite;
 }
 
 .empty-cover-mark {
@@ -1025,6 +1170,7 @@ onMounted(async () => {
   border-color: rgba(var(--accent-rgb), 0.18);
   color: var(--text-primary);
   background: rgba(var(--accent-rgb), 0.08);
+  transform: translateX(2px);
 }
 
 .input-bar {
@@ -1245,6 +1391,7 @@ onMounted(async () => {
 }
 
 .input-wrapper {
+  position: relative;
   flex: 1;
   min-width: 0;
   padding: 10px 12px;
@@ -1262,6 +1409,21 @@ onMounted(async () => {
     var(--shadow-surface),
     0 0 0 1px rgba(var(--accent-rgb), 0.16),
     0 0 0 4px rgba(var(--accent-rgb), 0.08);
+}
+
+.input-wrapper::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: 22px;
+  pointer-events: none;
+  opacity: 0;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.18), transparent 45%, rgba(var(--accent-rgb), 0.12));
+  transition: opacity 180ms ease;
+}
+
+.input-wrapper.focused::after {
+  opacity: 1;
 }
 
 .chat-input {
@@ -1282,6 +1444,49 @@ onMounted(async () => {
 
 .chat-input::placeholder {
   color: var(--text-disabled);
+}
+
+.slash-panel {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  animation: fadeRise 0.2s var(--ease-out) both;
+}
+
+.slash-item {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  padding: 10px 12px;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 140ms ease;
+}
+
+.slash-item:hover,
+.slash-item.active {
+  border-color: rgba(var(--accent-rgb), 0.18);
+  background: rgba(var(--accent-rgb), 0.08);
+  transform: translateY(-1px);
+}
+
+.slash-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.slash-desc {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .composer-actions {
@@ -1308,6 +1513,7 @@ onMounted(async () => {
   transform: translateY(-1px);
   background: rgba(var(--accent-rgb), 0.18);
   border-color: rgba(var(--accent-rgb), 0.28);
+  box-shadow: 0 10px 30px rgba(var(--accent-rgb), 0.22);
 }
 
 .send-btn:disabled,
@@ -1334,6 +1540,26 @@ onMounted(async () => {
 @keyframes spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes cardFloatIn {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes sheenSweep {
+  0% {
+    transform: translateX(-55%) translateY(-10%) rotate(8deg);
+  }
+  100% {
+    transform: translateX(60%) translateY(10%) rotate(8deg);
   }
 }
 
