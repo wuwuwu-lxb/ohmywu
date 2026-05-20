@@ -17,6 +17,8 @@ pub struct NoteMeta {
     pub updated: String,
     pub links_to: Vec<String>,
     pub linked_from: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +44,7 @@ pub struct GraphData {
 pub struct GraphNode {
     pub id: String,
     pub label: String,
+    pub folder: String,
     pub tags: Vec<String>,
     pub link_count: usize,
 }
@@ -142,6 +145,7 @@ impl WikiEngine {
                     updated: note.updated,
                     links_to: extract_links(&note.body),
                     linked_from: backlinks,
+                    snippet: None,
                 });
             }
         })?;
@@ -208,6 +212,48 @@ impl WikiEngine {
         })
     }
 
+    pub fn upsert_note(
+        &self,
+        current_slug: Option<&str>,
+        slug: Option<&str>,
+        title: &str,
+        body: &str,
+        tags: &[String],
+        folder: &str,
+    ) -> Result<WikiNote, String> {
+        let base_slug = slug
+            .filter(|value| !value.trim().is_empty())
+            .or(current_slug)
+            .unwrap_or(title);
+        let next_slug = slugify(base_slug);
+        if next_slug.is_empty() {
+            return Err("slug/title 不能为空".into());
+        }
+
+        let target_folder = if folder.trim().is_empty() {
+            "notes"
+        } else {
+            folder.trim()
+        };
+        let target_path = self.root.join(target_folder).join(format!("{}.md", next_slug));
+
+        let existing = current_slug
+            .filter(|value| !value.trim().is_empty())
+            .and_then(|value| self.read_note(value).ok());
+
+        let note = self.write_note(&next_slug, title, body, tags, target_folder)?;
+
+        if let Some(previous) = existing {
+            if previous.file_path != target_path && previous.file_path.exists() {
+                fs::remove_file(&previous.file_path)
+                    .map_err(|e| format!("remove old note {:?}: {}", previous.file_path, e))?;
+                self.rebuild_index()?;
+            }
+        }
+
+        Ok(note)
+    }
+
     pub fn delete_note(&self, slug: &str) -> Result<(), String> {
         let path = self.find_by_slug(slug)?;
         // safety: only delete .md files inside the wiki root
@@ -260,6 +306,7 @@ impl WikiEngine {
                             updated: note.updated,
                             links_to: extract_links(&note.body),
                             linked_from: backlinks,
+                            snippet: Some(build_snippet(&note.body, &q_lower, 220)),
                         },
                         score,
                     ));
@@ -291,6 +338,7 @@ impl WikiEngine {
                 nodes.push(GraphNode {
                     id: slug.clone(),
                     label: meta.title.clone(),
+                    folder: meta.folder.clone(),
                     tags: meta.tags.clone(),
                     link_count: meta.links_to.len() + meta.linked_from.len(),
                 });
@@ -309,6 +357,7 @@ impl WikiEngine {
                     nodes.push(GraphNode {
                         id: target.clone(),
                         label: target.clone(),
+                        folder: "ghost".to_string(),
                         tags: vec![],
                         link_count: 0,
                     });

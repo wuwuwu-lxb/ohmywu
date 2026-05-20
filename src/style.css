@@ -97,6 +97,28 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+select,
+option,
+optgroup {
+  color-scheme: dark;
+}
+
+select {
+  background-color: rgba(15, 19, 27, 0.96);
+  color: var(--text-primary);
+}
+
+select option,
+select optgroup {
+  background: #0f131b;
+  color: var(--text-primary);
+}
+
+select option:checked {
+  background: rgba(var(--accent-rgb), 0.22);
+  color: var(--text-primary);
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
+import ThemeSelect from "../components/ThemeSelect.vue"
 import { useTheme } from "../composables/useTheme"
 import { useChatStore, type AgentMode } from "../stores/chat"
 import { BACKGROUND_PRESETS, THEME_PRESETS } from "../lib/theme"
-import { getToolMeta, toolRiskLabel, type CapabilityInfo, type ToolRisk } from "../lib/tools"
+import type { CapabilityInfo, ToolRisk } from "../lib/tools"
 import type { BackgroundPreset, ThemePreset } from "../lib/theme"
 
 type PolicyMode = "Sandbox" | "Danger"
@@ -51,16 +52,6 @@ interface AppConfig {
   permissions: {
     rules: PermissionRule[]
   }
-}
-
-interface ToolCard extends CapabilityInfo {
-  label: string
-  short: string
-  detail: string
-  example?: string
-  visible: boolean
-  blockedByPolicy: boolean
-  runtimeHint: string
 }
 
 const chatStore = useChatStore()
@@ -125,19 +116,6 @@ function needsKeyFor(id: string) {
   return id !== "ollama"
 }
 
-function riskWeight(risk: ToolRisk): number {
-  switch (risk) {
-    case "ReadOnly":
-      return 0
-    case "ControlledWrite":
-      return 1
-    case "HighRisk":
-      return 2
-    default:
-      return 3
-  }
-}
-
 function rulesToText(rules: PermissionRule[]): string {
   return rules.map((rule) => `${rule.effect}: ${rule.tool}`).join("\n")
 }
@@ -165,24 +143,6 @@ function isToolVisible(name: string, risk: ToolRisk, mode: AgentMode): boolean {
     return true
   }
   return mode === "plan" ? risk === "ReadOnly" : true
-}
-
-function runtimeHintFor(risk: ToolRisk, visible: boolean, blockedByPolicy: boolean, mode: AgentMode): string {
-  if (!visible) {
-    return "当前模式下隐藏，不会暴露给模型。"
-  }
-  if (blockedByPolicy) {
-    return "当前会被策略层直接拦截，权限规则也不会生效。"
-  }
-  if (risk === "HighRisk") {
-    return mode === "auto"
-      ? "当前会直接执行，高风险不再二次确认。"
-      : "当前会要求确认，避免模型直接执行高风险操作。"
-  }
-  if (risk === "ControlledWrite") {
-    return "当前可执行，但仍受 allow/deny 规则限制。"
-  }
-  return "当前可直接执行，适合检索、读取和分析。"
 }
 
 const providers = ref<ProviderInfo[]>([])
@@ -213,6 +173,12 @@ const backgroundFileLabel = ref("未上传背景")
 const currentProvider = computed(() =>
   providers.value.find((p) => p.id === llmProvider.value) ?? providers.value.find((p) => p.id === "ollama")
 )
+const providerOptions = computed(() =>
+  providers.value.map((provider) => ({
+    label: provider.name,
+    value: provider.id,
+  }))
+)
 
 const parsedRuleError = computed(() => {
   try {
@@ -235,27 +201,9 @@ const allowRuleCount = computed(() => parsedRules.value.filter((rule) => rule.ef
 const denyRuleCount = computed(() => parsedRules.value.filter((rule) => rule.effect === "deny").length)
 const hasAllowRules = computed(() => allowRuleCount.value > 0)
 
-const capabilityCards = computed<ToolCard[]>(() =>
-  [...capabilities.value]
-    .sort((a, b) => riskWeight(a.risk_level) - riskWeight(b.risk_level) || a.name.localeCompare(b.name))
-    .map((cap) => {
-      const meta = getToolMeta(cap.name)
-      const visible = isToolVisible(cap.name, cap.risk_level, selectedAgentMode.value)
-      const blockedByPolicy = policyMode.value === "Sandbox" && cap.risk_level !== "ReadOnly"
-      return {
-        ...cap,
-        label: meta.label,
-        short: meta.short,
-        detail: meta.detail,
-        example: meta.example,
-        visible,
-        blockedByPolicy,
-        runtimeHint: runtimeHintFor(cap.risk_level, visible, blockedByPolicy, selectedAgentMode.value),
-      }
-    })
+const visibleToolCount = computed(() =>
+  capabilities.value.filter((cap) => isToolVisible(cap.name, cap.risk_level, selectedAgentMode.value)).length
 )
-
-const visibleToolCount = computed(() => capabilityCards.value.filter((tool) => tool.visible).length)
 
 const executionSummary = computed(() => {
   if (policyMode.value === "Sandbox") {
@@ -276,6 +224,11 @@ function onProviderChange() {
   llmEndpoint.value = defaultEndpointFor(provider.id)
   llmModel.value = provider.defaultModel
   llmApiKey.value = ""
+}
+
+function selectProvider(value: string | number) {
+  llmProvider.value = String(value)
+  onProviderChange()
 }
 
 async function loadSettings() {
@@ -541,7 +494,7 @@ async function saveExecutionSettings() {
       <div>
         <h2 class="hero-title">外观、模型与执行</h2>
         <p class="hero-subtitle">
-          这页不只管主题，也把当前代理能做什么、什么会被确认、什么会被直接拒绝展示清楚。
+          这里专注于主题、模型和执行策略。具体工具暴露与 action 兼容层已经拆到左侧的“原子化能力”页面。
         </p>
       </div>
     </header>
@@ -735,11 +688,12 @@ async function saveExecutionSettings() {
         <div class="field-group">
           <label class="field-label">Provider</label>
           <div class="provider-row">
-            <select v-model="llmProvider" class="form-input provider-select" @change="onProviderChange">
-              <option v-for="provider in providers" :key="provider.id" :value="provider.id">
-                {{ provider.name }}
-              </option>
-            </select>
+            <ThemeSelect
+              class="form-input provider-select"
+              :model-value="llmProvider"
+              :options="providerOptions"
+              @update:model-value="selectProvider"
+            />
             <span v-if="currentProvider?.iconColor" class="provider-dot" :style="{ background: currentProvider.iconColor }" />
             <span v-if="currentProvider" class="provider-id">{{ currentProvider.id }}</span>
             <a v-if="currentProvider?.websiteUrl" :href="currentProvider.websiteUrl" target="_blank" class="provider-link">官网</a>
@@ -865,36 +819,6 @@ async function saveExecutionSettings() {
         <span v-if="executionMsg" class="msg" :class="{ error: executionMsg.startsWith('保存失败') }">
           {{ executionMsg }}
         </span>
-      </div>
-    </section>
-
-    <section class="card">
-      <div class="card-header">
-        <div>
-          <h3 class="card-title">工具清单</h3>
-          <p class="card-subtitle">这里展示每个工具的用途、风险和当前模式下的行为，不再让工具系统像黑盒。</p>
-        </div>
-      </div>
-
-      <div class="tool-grid">
-        <article v-for="tool in capabilityCards" :key="tool.name" class="tool-card">
-          <div class="tool-top">
-            <div>
-              <div class="tool-label">{{ tool.label }}</div>
-              <div class="tool-name">{{ tool.name }}</div>
-            </div>
-            <div class="tool-tags">
-              <span class="tool-tag risk">{{ toolRiskLabel(tool.risk_level) }}</span>
-              <span :class="['tool-tag', tool.visible ? 'ok' : 'muted']">{{ tool.visible ? "已暴露" : "已隐藏" }}</span>
-              <span v-if="tool.blockedByPolicy" class="tool-tag warn">策略拦截</span>
-            </div>
-          </div>
-
-          <p class="tool-short">{{ tool.short }}</p>
-          <p class="tool-detail">{{ tool.detail }}</p>
-          <p class="tool-runtime">{{ tool.runtimeHint }}</p>
-          <p v-if="tool.example" class="tool-example">示例：{{ tool.example }}</p>
-        </article>
       </div>
     </section>
   </div>

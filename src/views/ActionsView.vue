@@ -169,7 +169,7 @@ onMounted(loadActions)
           </div>
 
           <div v-if="expandedActionId === a.id" class="blueprint-panel">
-            <div v-if="detailLoading[a.id]" class="blueprint-empty">正在编译 action blueprint…</div>
+            <div v-if="detailLoading[a.id]" class="blueprint-empty">正在编译 action blueprint...</div>
             <div v-else-if="detailErrors[a.id]" class="blueprint-error">{{ detailErrors[a.id] }}</div>
             <template v-else-if="actionBlueprints[a.id]">
               <div class="blueprint-top">

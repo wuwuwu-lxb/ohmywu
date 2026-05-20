@@ -77,7 +77,7 @@ const SYSTEM_PROMPT: &str = "\
 4. 你直接跑在用户的电脑上，拥有本地执行能力。
 ";
 
-const MAX_ITERATIONS: usize = 10;
+const MAX_ITERATIONS: usize = 48;
 
 pub struct AgentResponse {
     pub content: String,

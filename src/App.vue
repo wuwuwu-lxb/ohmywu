@@ -5,15 +5,18 @@ import Sidebar from "./components/Sidebar.vue"
 import RightPanel from "./components/RightPanel.vue"
 import { useSidebarNav } from "./composables/useNav"
 import { useTheme } from "./composables/useTheme"
+import { useChatStore } from "./stores/chat"
 import ChatView from "./views/ChatView.vue"
 import AgentManagementView from "./views/AgentManagementView.vue"
 import ActionsView from "./views/ActionsView.vue"
+import AtomicCapabilitiesView from "./views/AtomicCapabilitiesView.vue"
 import AuditView from "./views/AuditView.vue"
 import SettingsView from "./views/SettingsView.vue"
 import WikiView from "./views/WikiView.vue"
 import type { Component } from "vue"
 
 const { items, register } = useSidebarNav()
+const chatStore = useChatStore()
 const {
   initFromConfig,
   backgroundImageUrl,
@@ -29,6 +32,7 @@ const viewMap: Record<string, Component> = {
   chat: markRaw(ChatView),
   agents: markRaw(AgentManagementView),
   wiki: markRaw(WikiView),
+  atomic: markRaw(AtomicCapabilitiesView),
   actions: markRaw(ActionsView),
   audit: markRaw(AuditView),
   __settings__: markRaw(SettingsView),
@@ -44,9 +48,20 @@ const handleShowTask = (taskId: string) => {
 }
 
 const currentViewLabel = computed(() => {
+  if (activeView.value === "chat") {
+    return chatStore.panel === "manager" ? "对话管理" : "对话"
+  }
   if (activeView.value === "__settings__") return "设置"
   return items.value.find((item) => item.id === activeView.value)?.label || "OhMyWu"
 })
+
+const showChatManagerArrow = computed(
+  () => activeView.value === "chat" && chatStore.panel === "conversation"
+)
+
+const showChatConversationArrow = computed(
+  () => activeView.value === "chat" && chatStore.panel === "manager"
+)
 
 onMounted(async () => {
   try {
@@ -76,6 +91,7 @@ onMounted(async () => {
   register({ id: "chat", label: "对话", icon: "💬" })
   register({ id: "agents", label: "Agent 管理", icon: "🧠" })
   register({ id: "wiki", label: "知识库", icon: "📖" })
+  register({ id: "atomic", label: "原子化能力", icon: "⚙" })
   register({ id: "actions", label: "Actions", icon: "⚡" })
   register({ id: "audit", label: "审计日志", icon: "📋" })
 })
@@ -108,10 +124,22 @@ onMounted(async () => {
       <main class="main-area">
         <header class="topbar">
           <div class="topbar-left">
-            <button class="topbar-btn" type="button" aria-label="back">
+            <button
+              v-if="showChatManagerArrow"
+              class="topbar-btn"
+              type="button"
+              aria-label="open manager"
+              @click="chatStore.setPanel('manager')"
+            >
               <span>‹</span>
             </button>
-            <button class="topbar-btn" type="button" aria-label="forward">
+            <button
+              v-else-if="showChatConversationArrow"
+              class="topbar-btn"
+              type="button"
+              aria-label="open conversation"
+              @click="chatStore.setPanel('conversation')"
+            >
               <span>›</span>
             </button>
             <div class="topbar-title">

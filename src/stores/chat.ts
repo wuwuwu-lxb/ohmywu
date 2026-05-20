@@ -45,10 +45,13 @@ export interface SavedMemoryNote {
 export interface SessionSummary {
   id: string
   name: string
+  category: string
   message_count: number
   created_at: string
   updated_at: string
 }
+
+export type ChatPanel = "conversation" | "manager"
 
 interface BackendMessage {
   role: string
@@ -170,10 +173,44 @@ function backendMsgToChatMsg(msg: BackendMessage): ChatMsg {
   }
 }
 
+const CHAT_PANEL_KEY = "ohmywu.chat.panel"
+const CHAT_CATEGORY_KEY = "ohmywu.chat.category"
+const CHAT_CUSTOM_CATEGORIES_KEY = "ohmywu.chat.custom-categories"
+const CHAT_CURRENT_SESSION_KEY = "ohmywu.chat.current-session"
+
+function loadStoredString(key: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback
+  return window.localStorage.getItem(key) || fallback
+}
+
+function loadStoredArray(key: string): string[] {
+  if (typeof window === "undefined") return []
+  try {
+    const raw = window.localStorage.getItem(key)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : []
+  } catch {
+    return []
+  }
+}
+
+function persistString(key: string, value: string) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(key, value)
+}
+
+function persistArray(key: string, value: string[]) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(key, JSON.stringify(value))
+}
+
 export const useChatStore = defineStore("chat", () => {
   const messages = ref<ChatMsg[]>([])
   const sessions = ref<SessionSummary[]>([])
-  const currentSessionId = ref<string | null>(null)
+  const currentSessionId = ref<string | null>(
+    loadStoredString(CHAT_CURRENT_SESSION_KEY, "") || null
+  )
   const pending = ref(false)
   const error = ref<string | null>(null)
   const streamingContent = ref("")
@@ -182,6 +219,11 @@ export const useChatStore = defineStore("chat", () => {
   const runtimeEvents = ref<RuntimeEvent[]>([])
   const runtimeStatus = ref("Ready")
   const activeTurnId = ref<string | null>(null)
+  const panel = ref<ChatPanel>(
+    loadStoredString(CHAT_PANEL_KEY, "conversation") as ChatPanel
+  )
+  const selectedCategory = ref(loadStoredString(CHAT_CATEGORY_KEY, "all"))
+  const customCategories = ref(loadStoredArray(CHAT_CUSTOM_CATEGORIES_KEY))
   const memoryCandidates = ref<Record<string, MemoryCandidate>>({})
   const memoryGenerating = ref<Record<string, boolean>>({})
   const memorySaving = ref<Record<string, boolean>>({})
@@ -194,6 +236,27 @@ export const useChatStore = defineStore("chat", () => {
   const currentSession = computed(() =>
     sessions.value.find((s) => s.id === currentSessionId.value)
   )
+  const sessionCategories = computed(() => {
+    const merged = new Set<string>()
+    for (const category of customCategories.value) {
+      const trimmed = category.trim()
+      if (trimmed) merged.add(trimmed)
+    }
+    for (const session of sessions.value) {
+      const trimmed = (session.category || "").trim()
+      if (trimmed) merged.add(trimmed)
+    }
+    return [...merged].sort((a, b) => a.localeCompare(b, "zh-CN"))
+  })
+  const filteredSessions = computed(() => {
+    if (selectedCategory.value === "all") {
+      return sessions.value
+    }
+    if (selectedCategory.value === "__uncategorized__") {
+      return sessions.value.filter((session) => !(session.category || "").trim())
+    }
+    return sessions.value.filter((session) => (session.category || "").trim() === selectedCategory.value)
+  })
   const latestRuntimeEvent = computed(() =>
     runtimeEvents.value.length ? runtimeEvents.value[runtimeEvents.value.length - 1] : null
   )
@@ -286,6 +349,19 @@ export const useChatStore = defineStore("chat", () => {
     return map
   })
 
+  function resetSessionState() {
+    messages.value = []
+    runtimeTurns.value = []
+    runtimeEvents.value = []
+    runtimeStatus.value = "Ready"
+    activeTurnId.value = null
+    memoryCandidates.value = {}
+    memoryGenerating.value = {}
+    memorySaving.value = {}
+    memoryErrors.value = {}
+    memorySaved.value = {}
+  }
+
   function upsertRuntimeTurn(turn: RuntimeTurn) {
     const existingIndex = runtimeTurns.value.findIndex((item) => item.id === turn.id)
     if (existingIndex >= 0) {
@@ -356,8 +432,10 @@ export const useChatStore = defineStore("chat", () => {
       const list = await invoke<SessionSummary[]>("list_sessions")
       sessions.value = list
       if (list.length > 0) {
-        currentSessionId.value = list[0].id
-        await loadSession(list[0].id)
+        const targetId = currentSessionId.value && list.some((session) => session.id === currentSessionId.value)
+          ? currentSessionId.value
+          : list[0].id
+        await loadSession(targetId)
       } else {
         await createSession("新对话")
       }
@@ -376,19 +454,15 @@ export const useChatStore = defineStore("chat", () => {
 
   async function createSession(name: string) {
     try {
-      const summary = await invoke<SessionSummary>("create_session", { name })
+      const category =
+        selectedCategory.value !== "all" && selectedCategory.value !== "__uncategorized__"
+          ? selectedCategory.value
+          : ""
+      const summary = await invoke<SessionSummary>("create_session", { name, category })
       sessions.value.unshift(summary)
       currentSessionId.value = summary.id
-      messages.value = []
-      runtimeTurns.value = []
-      runtimeEvents.value = []
-      runtimeStatus.value = "Ready"
-      activeTurnId.value = null
-      memoryCandidates.value = {}
-      memoryGenerating.value = {}
-      memorySaving.value = {}
-      memoryErrors.value = {}
-      memorySaved.value = {}
+      persistString(CHAT_CURRENT_SESSION_KEY, summary.id)
+      resetSessionState()
     } catch (e) {
       console.error("Create session:", e)
       error.value = String(e)
@@ -400,6 +474,7 @@ export const useChatStore = defineStore("chat", () => {
       const msgs = await invoke<BackendMessage[]>("load_session", { sessionId: id })
       messages.value = msgs.map(backendMsgToChatMsg)
       currentSessionId.value = id
+      persistString(CHAT_CURRENT_SESSION_KEY, id)
       memoryCandidates.value = {}
       memoryGenerating.value = {}
       memorySaving.value = {}
@@ -436,6 +511,81 @@ export const useChatStore = defineStore("chat", () => {
     } catch (e) {
       console.error("List sessions:", e)
     }
+  }
+
+  async function deleteSession(id: string) {
+    if (pending.value) return
+
+    const wasCurrent = currentSessionId.value === id
+
+    try {
+      await invoke("delete_session", { sessionId: id })
+      await refreshSessions()
+
+      if (!sessions.value.length) {
+        currentSessionId.value = null
+        persistString(CHAT_CURRENT_SESSION_KEY, "")
+        resetSessionState()
+        await createSession("新对话")
+        return
+      }
+
+      if (wasCurrent) {
+        await loadSession(sessions.value[0].id)
+      }
+    } catch (e) {
+      console.error("Delete session:", e)
+      error.value = String(e)
+    }
+  }
+
+  async function updateSessionMeta(
+    sessionId: string,
+    patch: {
+      name?: string
+      category?: string
+    }
+  ) {
+    try {
+      const summary = await invoke<SessionSummary>("update_session_meta", {
+        sessionId,
+        name: patch.name ?? null,
+        category: patch.category ?? null,
+      })
+      const index = sessions.value.findIndex((session) => session.id === sessionId)
+      if (index >= 0) {
+        sessions.value[index] = summary
+      } else {
+        await refreshSessions()
+      }
+      return summary
+    } catch (e) {
+      console.error("Update session meta:", e)
+      error.value = String(e)
+      throw e
+    }
+  }
+
+  function setPanel(next: ChatPanel) {
+    panel.value = next
+    persistString(CHAT_PANEL_KEY, next)
+  }
+
+  function setSelectedCategory(category: string) {
+    selectedCategory.value = category
+    persistString(CHAT_CATEGORY_KEY, category)
+  }
+
+  function addCustomCategory(name: string) {
+    const trimmed = name.trim()
+    if (!trimmed) return
+    if (!customCategories.value.includes(trimmed)) {
+      customCategories.value = [...customCategories.value, trimmed].sort((a, b) =>
+        a.localeCompare(b, "zh-CN")
+      )
+      persistArray(CHAT_CUSTOM_CATEGORIES_KEY, customCategories.value)
+    }
+    setSelectedCategory(trimmed)
   }
 
   async function sendMessage(content: string, agentProfile?: AgentProfile) {
@@ -628,6 +778,9 @@ export const useChatStore = defineStore("chat", () => {
     runtimeEvents,
     runtimeStatus,
     activeTurnId,
+    panel,
+    selectedCategory,
+    customCategories,
     memoryCandidates,
     memoryGenerating,
     memorySaving,
@@ -636,11 +789,18 @@ export const useChatStore = defineStore("chat", () => {
     latestRuntimeEvent,
     runtimeByTurnId,
     currentSession,
+    sessionCategories,
+    filteredSessions,
     init,
     createSession,
     loadSession,
     loadRuntimeThread,
     refreshSessions,
+    deleteSession,
+    updateSessionMeta,
+    setPanel,
+    setSelectedCategory,
+    addCustomCategory,
     sendMessage,
     setAgentMode,
     cancelAgent,

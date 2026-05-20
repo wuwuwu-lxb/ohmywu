@@ -302,9 +302,10 @@ async fn set_agent_mode(
 #[tauri::command]
 async fn create_session(
     name: String,
+    category: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<SessionSummary, String> {
-    state.session.create_session(&name)
+    state.session.create_session(&name, category.as_deref())
 }
 
 #[tauri::command]
@@ -329,6 +330,18 @@ async fn delete_session(
 ) -> Result<(), String> {
     state.session.delete_session(&session_id)
         .and_then(|_| state.runtime.delete_thread(&session_id))
+}
+
+#[tauri::command]
+async fn update_session_meta(
+    session_id: String,
+    name: Option<String>,
+    category: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<SessionSummary, String> {
+    state
+        .session
+        .update_session_meta(&session_id, name.as_deref(), category.as_deref())
 }
 
 #[tauri::command]
@@ -867,6 +880,36 @@ fn wiki_read_note(
 }
 
 #[tauri::command]
+fn wiki_upsert_note(
+    current_slug: Option<String>,
+    slug: Option<String>,
+    title: String,
+    body: String,
+    tags: Vec<String>,
+    folder: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ohmywu_wiki::WikiNote, String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.upsert_note(
+        current_slug.as_deref(),
+        slug.as_deref(),
+        &title,
+        &body,
+        &tags,
+        &folder,
+    )
+}
+
+#[tauri::command]
+fn wiki_delete_note(
+    slug: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let wiki = state.wiki.read().map_err(|e| format!("Lock: {}", e))?;
+    wiki.delete_note(&slug)
+}
+
+#[tauri::command]
 fn wiki_search_notes(
     query: String,
     state: tauri::State<'_, AppState>,
@@ -914,6 +957,7 @@ pub fn run() {
             list_sessions,
             load_session,
             delete_session,
+            update_session_meta,
             load_runtime_thread,
             send_message,
             get_config,
@@ -927,6 +971,8 @@ pub fn run() {
             save_memory_candidate,
             wiki_list_notes,
             wiki_read_note,
+            wiki_upsert_note,
+            wiki_delete_note,
             wiki_search_notes,
             wiki_get_graph,
         ])

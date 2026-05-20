@@ -43,7 +43,19 @@ pub struct ExecutionRecord {
 pub struct SessionSummary {
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub category: String,
     pub message_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionMeta {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub category: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -69,9 +81,17 @@ impl SessionManager {
         self.sessions_dir.join(format!("{}.jsonl", session_id))
     }
 
+    fn meta_path(&self, session_id: &str) -> PathBuf {
+        self.sessions_dir.join(format!("{}.meta.json", session_id))
+    }
+
     // ── session CRUD ──────────────────────────────────────────────
 
-    pub fn create_session(&self, name: &str) -> Result<SessionSummary, String> {
+    pub fn create_session(
+        &self,
+        name: &str,
+        category: Option<&str>,
+    ) -> Result<SessionSummary, String> {
         let now = ohmywu_domain::chrono_now();
         let date = &now[..10].replace('-', "");
         let counter = self.next_counter_for_date(date)?;
@@ -83,11 +103,20 @@ impl SessionManager {
 
         let summary = SessionSummary {
             id,
-            name: name.to_string(),
+            name: name.trim().to_string(),
+            category: category.unwrap_or_default().trim().to_string(),
             message_count: 0,
             created_at: now.clone(),
             updated_at: now,
         };
+
+        self.write_meta(&SessionMeta {
+            id: summary.id.clone(),
+            name: summary.name.clone(),
+            category: summary.category.clone(),
+            created_at: summary.created_at.clone(),
+            updated_at: summary.updated_at.clone(),
+        })?;
 
         Ok(summary)
     }
@@ -106,6 +135,7 @@ impl SessionManager {
             .open(&path)
             .map_err(|e| format!("Open session {}: {}", path.display(), e))?;
         writeln!(file, "{}", line).map_err(|e| format!("Write msg: {}", e))?;
+        self.touch_meta(session_id, &msg.timestamp)?;
         Ok(())
     }
 
@@ -150,16 +180,17 @@ impl SessionManager {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown");
-            let name = stem.to_string();
-
-            let (msg_count, created_at, updated_at) = self.scan_summary(&name)?;
+            let session_id = stem.to_string();
+            let (msg_count, created_at, updated_at) = self.scan_summary(&session_id)?;
+            let meta = self.load_or_init_meta(&session_id, &created_at, &updated_at)?;
 
             summaries.push(SessionSummary {
-                id: name.clone(),
-                name,
+                id: session_id,
+                name: meta.name,
+                category: meta.category,
                 message_count: msg_count,
-                created_at,
-                updated_at,
+                created_at: meta.created_at,
+                updated_at: meta.updated_at,
             });
         }
 
@@ -217,10 +248,102 @@ impl SessionManager {
             fs::remove_file(&path)
                 .map_err(|e| format!("Delete session {}: {}", path.display(), e))?;
         }
+        let meta_path = self.meta_path(session_id);
+        if meta_path.exists() {
+            fs::remove_file(&meta_path)
+                .map_err(|e| format!("Delete session meta {}: {}", meta_path.display(), e))?;
+        }
         Ok(())
     }
 
+    pub fn update_session_meta(
+        &self,
+        session_id: &str,
+        name: Option<&str>,
+        category: Option<&str>,
+    ) -> Result<SessionSummary, String> {
+        let path = self.file_path(session_id);
+        if !path.exists() {
+            return Err(format!("Session not found: {}", session_id));
+        }
+
+        let (message_count, created_at, updated_at) = self.scan_summary(session_id)?;
+        let mut meta = self.load_or_init_meta(session_id, &created_at, &updated_at)?;
+
+        if let Some(next_name) = name {
+            let trimmed = next_name.trim();
+            if !trimmed.is_empty() {
+                meta.name = trimmed.to_string();
+            }
+        }
+
+        if let Some(next_category) = category {
+            meta.category = next_category.trim().to_string();
+        }
+
+        self.write_meta(&meta)?;
+
+        Ok(SessionSummary {
+            id: session_id.to_string(),
+            name: meta.name,
+            category: meta.category,
+            message_count,
+            created_at: meta.created_at,
+            updated_at: meta.updated_at,
+        })
+    }
+
     // ── helpers ───────────────────────────────────────────────────
+
+    fn load_or_init_meta(
+        &self,
+        session_id: &str,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<SessionMeta, String> {
+        if let Some(meta) = self.read_meta(session_id)? {
+            return Ok(meta);
+        }
+
+        let meta = SessionMeta {
+            id: session_id.to_string(),
+            name: session_id.to_string(),
+            category: String::new(),
+            created_at: created_at.to_string(),
+            updated_at: updated_at.to_string(),
+        };
+        self.write_meta(&meta)?;
+        Ok(meta)
+    }
+
+    fn read_meta(&self, session_id: &str) -> Result<Option<SessionMeta>, String> {
+        let path = self.meta_path(session_id);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Read session meta {}: {}", path.display(), e))?;
+        let meta = serde_json::from_str(&content)
+            .map_err(|e| format!("Parse session meta {}: {}", path.display(), e))?;
+        Ok(Some(meta))
+    }
+
+    fn write_meta(&self, meta: &SessionMeta) -> Result<(), String> {
+        let path = self.meta_path(&meta.id);
+        let json = serde_json::to_string_pretty(meta)
+            .map_err(|e| format!("Serialize session meta: {}", e))?;
+        fs::write(&path, json)
+            .map_err(|e| format!("Write session meta {}: {}", path.display(), e))?;
+        Ok(())
+    }
+
+    fn touch_meta(&self, session_id: &str, updated_at: &str) -> Result<(), String> {
+        let (count, created_at, fallback_updated_at) = self.scan_summary(session_id)?;
+        let _ = count;
+        let mut meta = self.load_or_init_meta(session_id, &created_at, &fallback_updated_at)?;
+        meta.updated_at = updated_at.to_string();
+        self.write_meta(&meta)
+    }
 
     fn next_counter_for_date(&self, date: &str) -> Result<u32, String> {
         let prefix = format!("session-{}-", date);

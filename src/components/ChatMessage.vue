@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue"
 import ExecutionCard from "./ExecutionCard.vue"
 import RuntimeSummary from "./RuntimeSummary.vue"
+import ThemeSelect from "./ThemeSelect.vue"
 import { renderMarkdown } from "../lib/markdown"
 import type {
   ChatMsg,
@@ -35,6 +36,12 @@ const renderedHtml = computed(() => renderMarkdown(props.msg.content || ""))
 const memoryOpen = computed(() =>
   !!props.memoryCandidate || !!props.memoryError || !!props.memoryGenerating || !!props.memorySaved
 )
+const memoryFolderOptions = [
+  { label: "concepts", value: "concepts" },
+  { label: "notes", value: "notes" },
+  { label: "daily", value: "daily" },
+  { label: "profile", value: "profile" },
+]
 
 watch(
   () => props.memoryCandidate?.tags,
@@ -147,16 +154,12 @@ function updateTags(value: string) {
 
               <label class="memory-field">
                 <span>范围</span>
-                <select
+                <ThemeSelect
                   class="memory-input"
-                  :value="memoryCandidate.folder"
-                  @change="updateCandidate({ folder: ($event.target as HTMLSelectElement).value })"
-                >
-                  <option value="concepts">concepts</option>
-                  <option value="notes">notes</option>
-                  <option value="daily">daily</option>
-                  <option value="profile">profile</option>
-                </select>
+                  :model-value="memoryCandidate.folder"
+                  :options="memoryFolderOptions"
+                  @update:model-value="(value) => updateCandidate({ folder: String(value) })"
+                />
               </label>
             </div>
 

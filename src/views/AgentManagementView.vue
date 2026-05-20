@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ThemeSelect from "../components/ThemeSelect.vue"
 import {
   MEMORY_SCOPE_FOLDERS,
   MEMORY_SCOPE_FOLDER_LABELS,
@@ -12,6 +13,10 @@ import {
 
 const store = useAgentStore()
 const recallLimitOptions = [1, 2, 3, 4, 5, 6, 7, 8]
+const recallLimitSelectOptions = recallLimitOptions.map((limit) => ({
+  label: `${limit} 条`,
+  value: limit,
+}))
 
 function defaultScopeLabel(mode: MemoryScopeMode, folders: readonly MemoryScopeFolder[]) {
   return defaultMemoryScopeLabel(mode, folders)
@@ -181,11 +186,12 @@ function toolText(agent: AgentProfile) {
 
             <label class="field">
               <span>召回上限</span>
-              <select v-model.number="agent.memoryScope.recallLimit" class="field-input">
-                <option v-for="limit in recallLimitOptions" :key="limit" :value="limit">
-                  {{ limit }} 条
-                </option>
-              </select>
+              <ThemeSelect
+                class="field-input"
+                :model-value="agent.memoryScope.recallLimit"
+                :options="recallLimitSelectOptions"
+                @update:model-value="(value) => agent.memoryScope.recallLimit = Number(value)"
+              />
             </label>
           </div>
 
