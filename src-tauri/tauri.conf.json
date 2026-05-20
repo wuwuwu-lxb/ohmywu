@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicepage/nicepage/refs/heads/main/schema.json",
   "productName": "OhMyWu",
-  "version": "0.1.0",
-  "identifier": "com.ohmywu.app",
+  "version": "0.1.0-beta.1",
+  "identifier": "com.ohmywu.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
