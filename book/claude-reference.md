@@ -1,5 +1,7 @@
 # Claude Code 架构参考
 
+> 说明：这是一份外部参考分析，不代表 OhMyWu 当前实现。当前项目状态请看 `book/implementation.md`。
+
 > 基于 Claude Code 泄露源码（npm source map，2026-03-31）及社区逆向分析的综合整理。
 > 来源：`claude-code-from-scratch`、`Dive-into-Claude-Code`、`Inside-Claude-Code-Architecture-and-Design-Philosophy`
 
