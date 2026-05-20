@@ -9,6 +9,16 @@ export interface ExecutionInfo {
   output?: string
   error?: string
   duration?: string
+  delegated?: {
+    agentId: string
+    agentName: string
+    role?: string
+    task?: string
+    content?: string
+    reasoningContent?: string | null
+    executionCount?: number
+    executions: ExecutionInfo[]
+  } | null
 }
 
 const props = defineProps<{ exec: ExecutionInfo }>()
@@ -43,6 +53,34 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
       <div v-if="exec.error" class="exec-section error">
         <span class="exec-label">错误</span>
         <pre class="exec-code">{{ exec.error }}</pre>
+      </div>
+      <div v-if="exec.delegated" class="delegate-block">
+        <div class="delegate-head">
+          <div class="delegate-title-row">
+            <span class="delegate-title">{{ exec.delegated.agentName || "子 Agent" }}</span>
+            <span class="delegate-pill">{{ exec.delegated.agentId }}</span>
+            <span v-if="exec.delegated.executionCount != null" class="delegate-pill">
+              {{ exec.delegated.executionCount }} 个子工具
+            </span>
+          </div>
+          <div v-if="exec.delegated.role" class="delegate-role">{{ exec.delegated.role }}</div>
+        </div>
+        <div v-if="exec.delegated.task" class="exec-section">
+          <span class="exec-label">委派任务</span>
+          <pre class="exec-code">{{ exec.delegated.task }}</pre>
+        </div>
+        <div v-if="exec.delegated.content" class="exec-section">
+          <span class="exec-label">子 Agent 输出</span>
+          <pre class="exec-code">{{ exec.delegated.content }}</pre>
+        </div>
+        <div v-if="exec.delegated.executions.length" class="delegate-tools">
+          <span class="exec-label">子 Agent 工具链</span>
+          <ExecutionCard
+            v-for="(childExec, index) in exec.delegated.executions"
+            :key="`${exec.delegated.agentId}-${index}`"
+            :exec="childExec"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -153,6 +191,50 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
 
 .exec-section:last-child {
   margin-bottom: 0;
+}
+
+.delegate-block {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(var(--accent-rgb), 0.18);
+}
+
+.delegate-head {
+  margin-bottom: 8px;
+}
+
+.delegate-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.delegate-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.delegate-role {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.delegate-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+
+.delegate-tools {
+  margin-top: 8px;
 }
 
 .exec-label {

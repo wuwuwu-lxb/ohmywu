@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 
-use futures::FutureExt;
-
-use ohmywu_domain::{chrono_now, AgentMode, RiskLevel};
+use ohmywu_domain::{chrono_now, AgentMode};
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall, ToolDef};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
 use ohmywu_session::{ExecutionRecord, SessionMessage};
@@ -22,6 +20,12 @@ pub struct AgentInvocationProfile {
     pub role: String,
     pub persona: String,
     pub memory_scope: String,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    #[serde(default)]
+    pub delegatable: bool,
+    #[serde(default)]
+    pub delegate_priority: i32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -48,18 +52,6 @@ struct MemoryScopeConfig {
 const SYSTEM_PROMPT: &str = "\
 你是 OhMyWu，一个帮助用户管理电脑的桌面 AI 助手。
 
-## 可用工具
-
-- `bash` — 执行 shell 命令
-- `read` — 读取文件内容
-- `write` — 写入文件（自动创建目录）
-- `edit` — 精确替换文件中的文本（old_string 必须唯一匹配）
-- `glob` — 搜索匹配模式的文件
-- `grep` — 搜索文件内容
-- `web_fetch` — 获取 URL 内容
-- `thinking` — 内部推理和规划
-- `checklist_write` — 写入当前回合的执行清单
-
 ## 权限规则
 
 - 只读工具（read/glob/grep/web_fetch/thinking）始终允许。
@@ -75,6 +67,8 @@ const SYSTEM_PROMPT: &str = "\
 2. 先简要解释你在做什么，再执行命令。
 3. 不需要工具时就文字回复。
 4. 你直接跑在用户的电脑上，拥有本地执行能力。
+5. 如果任务适合拆分，可以先用 `agent_list` 了解可用 Agent，再用 `agent_delegate` 委派边界清晰的子任务。
+6. 如果用户明确要求新增或调整长期角色，可以用 `agent_register` 注册或更新 Agent。
 ";
 
 const MAX_ITERATIONS: usize = 48;
@@ -96,6 +90,7 @@ pub async fn agent_loop(
     agent_profile: Option<&AgentInvocationProfile>,
     llm_config: &LlmConfig,
     app_handle: Option<&tauri::AppHandle>,
+    stream_chat: bool,
 ) -> std::result::Result<AgentResponse, LlmError> {
     let provider = create_provider(llm_config)?;
     let turn_started = Instant::now();
@@ -105,7 +100,7 @@ pub async fn agent_loop(
 
     // Step 2: Build the active toolset directly.
     // Claude Code style: prefer a single real execution path over pre-probe gating.
-    let tools = active_tool_defs(state);
+    let tools = active_tool_defs(state, agent_profile.map(|profile| profile.tools.as_slice()));
 
     let mut executions: Vec<ExecutionRecord> = Vec::new();
     let mut last_task_id: Option<String> = None;
@@ -168,6 +163,7 @@ pub async fn agent_loop(
             &messages,
             &tools,
             app_handle,
+            stream_chat,
             state,
             session_id,
             turn_id,
@@ -181,6 +177,7 @@ pub async fn agent_loop(
                     &messages,
                     &[],
                     app_handle,
+                    stream_chat,
                     state,
                     session_id,
                     turn_id,
@@ -215,8 +212,8 @@ pub async fn agent_loop(
             tool_call_id: None,
         });
 
-        // Build dispatch futures for all tool calls
-        let mut futures = Vec::new();
+        // Execute tool calls in order. This keeps delegation and runtime state predictable.
+        let mut results = Vec::new();
         let mut exec_meta: Vec<(String, String, String)> = Vec::new();
         // (tc.id, capability, input)
 
@@ -227,14 +224,15 @@ pub async fn agent_loop(
 
             let params: serde_json::Value = serde_json::from_str(&tc.function.arguments)
                 .unwrap_or(serde_json::Value::Null);
-            let params = augment_tool_params(&tc.function.name, params, session_id, turn_id);
+            let params = augment_tool_params(
+                &tc.function.name,
+                params,
+                session_id,
+                turn_id,
+                agent_profile.map(|profile| profile.id.as_str()),
+            );
 
-            // Tool name = capability name. Unknown tools fall back to bash.
-            let capability = if state.capabilities.contains(&tc.function.name) {
-                tc.function.name.clone()
-            } else {
-                "bash".to_string()
-            };
+            let capability = tc.function.name.clone();
 
             if early_cache.get(&tc.id).is_none()
                 && let Some(handle) = app_handle
@@ -254,35 +252,53 @@ pub async fn agent_loop(
                 let _ = handle.emit("runtime-event", &event);
             }
 
+            if capability == "agent_delegate"
+                && let Some(handle) = app_handle
+                && let Some(mut delegate_meta) = build_delegate_started_payload(&params)
+                && let Ok(event) = state.runtime.record_event(
+                    session_id,
+                    Some(turn_id),
+                    "agent.delegate.started",
+                    &format!(
+                        "委派给 {}",
+                        delegate_meta
+                            .get("targetAgentName")
+                            .and_then(|value| value.as_str())
+                            .or_else(|| delegate_meta.get("targetAgentId").and_then(|value| value.as_str()))
+                            .unwrap_or("子 Agent")
+                    ),
+                    {
+                        if let Some(obj) = delegate_meta.as_object_mut() {
+                            obj.insert("toolCallId".into(), serde_json::Value::String(tc.id.clone()));
+                        }
+                        delegate_meta
+                    },
+                )
+            {
+                let _ = handle.emit("runtime-event", &event);
+            }
+
             exec_meta.push((
                 tc.id.clone(),
                 capability.clone(),
                 tc.function.arguments.clone(),
             ));
 
-            // Use cached result if early-executed during streaming
             if let Some(cached) = early_cache.remove(&tc.id) {
-                futures.push(futures::future::ready(cached).boxed());
+                results.push(cached);
             } else {
                 let state_clone = state.clone();
-                futures.push(
-                    async move {
-                        tools::dispatch_tool(
-                            &state_clone,
-                            ExecuteRequest {
-                                capability,
-                                params,
-                            },
-                        )
-                        .await
-                    }
-                    .boxed(),
-                );
+                let result = tools::dispatch_tool(
+                    &state_clone,
+                    ExecuteRequest {
+                        capability,
+                        params,
+                    },
+                )
+                .await;
+                results.push(result);
             }
         }
-
-        // Run all tool dispatches concurrently
-        let results = futures::future::join_all(futures).await;
 
         // Process results in order
         for ((tc_id, capability, input), result) in exec_meta.iter().zip(results.iter()) {
@@ -308,6 +324,11 @@ pub async fn agent_loop(
             messages.push(ChatMessage::tool(&tool_result, tc_id));
 
             if let Some(handle) = app_handle {
+                let delegated = if capability == "agent_delegate" && result.status == "success" {
+                    parse_delegate_payload(result.output.as_deref())
+                } else {
+                    None
+                };
                 if let Ok(event) = state.runtime.record_event(
                     session_id,
                     Some(turn_id),
@@ -322,8 +343,28 @@ pub async fn agent_loop(
                         "errorPreview": result.error.as_deref().map(|s| preview_text(s, 256)),
                         "durationMs": result.duration_ms,
                         "taskId": result.task_id,
+                        "delegated": delegated,
                     }),
                 ) {
+                    let _ = handle.emit("runtime-event", &event);
+                }
+
+                if let Some(delegated) = delegated
+                    && let Ok(event) = state.runtime.record_event(
+                        session_id,
+                        Some(turn_id),
+                        "agent.delegate.completed",
+                        &format!(
+                            "子 Agent 完成：{}",
+                            delegated
+                                .get("agentName")
+                                .and_then(|value| value.as_str())
+                                .or_else(|| delegated.get("agentId").and_then(|value| value.as_str()))
+                                .unwrap_or("子 Agent")
+                        ),
+                        delegated,
+                    )
+                {
                     let _ = handle.emit("runtime-event", &event);
                 }
             }
@@ -344,6 +385,7 @@ async fn chat_once(
     messages: &[ChatMessage],
     tools: &[ToolDef],
     app_handle: Option<&tauri::AppHandle>,
+    stream_chat: bool,
     state: &AppState,
     session_id: &str,
     turn_id: &str,
@@ -364,7 +406,7 @@ async fn chat_once(
         ) {
             let _ = handle.emit("runtime-event", &event);
         }
-        match chat_with_streaming(provider, messages, tools, handle, state, session_id, turn_id, turn_started).await {
+        match chat_with_streaming(provider, messages, tools, handle, stream_chat, state, session_id, turn_id, turn_started).await {
             Ok(ok) => Ok(ok),
             Err(LlmError::Incompatible(_)) => Err(LlmError::Incompatible(
                 "streaming tools incompatible".into(),
@@ -450,13 +492,18 @@ fn build_system_prompt(
     let agent_note = agent_profile.map(|profile| {
         let scope = parse_memory_scope(&profile.memory_scope);
         format!(
-            "## 当前 Agent\n- 名称：{}\n- 角色：{}\n- 人格：{}\n- 记忆模式：{}\n- 记忆范围：{}\n- 召回上限：{}{}",
+            "## 当前 Agent\n- 名称：{}\n- 角色：{}\n- 人格：{}\n- 记忆模式：{}\n- 记忆范围：{}\n- 召回上限：{}\n- 工具范围：{}{}",
             profile.name,
             profile.role,
             profile.persona,
             human_scope_mode(&scope.mode),
             scope.label,
             scope.recall_limit,
+            if profile.tools.is_empty() {
+                "全部可用工具".to_string()
+            } else {
+                profile.tools.join(", ")
+            },
             scope
                 .notes
                 .as_ref()
@@ -464,13 +511,150 @@ fn build_system_prompt(
                 .unwrap_or_default()
         )
     });
+    let tool_note = Some(build_tool_prompt(state));
     let memory_note = memory_context.map(|memory| format!("## 已注入记忆\n{}", memory.text));
 
-    [Some(SYSTEM_PROMPT.to_string()), Some(mode_note.to_string()), agent_note, memory_note]
+    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+fn build_tool_prompt(state: &AppState) -> String {
+    let entries = state
+        .capability_catalog
+        .read()
+        .map(|catalog| catalog.active_entries())
+        .unwrap_or_default();
+    let mut lines = vec!["## 当前可用工具".to_string()];
+    for entry in entries {
+        lines.push(format!(
+            "- `{}`{} — {}",
+            entry.name,
+            if entry.title.trim().is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", entry.title)
+            },
+            entry.description
+        ));
+    }
+    lines.join("\n")
+}
+
+pub async fn delegate_to_agent(
+    state: &AppState,
+    session_id: &str,
+    parent_turn_id: &str,
+    target_profile: &AgentInvocationProfile,
+    task: &str,
+    llm_config: &LlmConfig,
+) -> Result<serde_json::Value, String> {
+    let child_turn_id = format!("{}::{}", parent_turn_id, target_profile.id);
+    let mut child_profile = target_profile.clone();
+    child_profile.tools.retain(|tool| tool != "agent_delegate");
+    let app_handle = state.get_app_handle();
+    let child_mode = state
+        .config
+        .read()
+        .map(|cfg| cfg.agent_mode)
+        .unwrap_or(AgentMode::Agent);
+
+    if let Some(handle) = app_handle.as_ref() {
+        let child_turn = state.runtime.start_delegated_turn(
+            session_id,
+            parent_turn_id,
+            &child_turn_id,
+            child_mode,
+            task,
+            &target_profile.name,
+        )?;
+        let _ = handle.emit(
+            "runtime-event",
+            serde_json::json!({
+                "sessionId": session_id,
+                "kind": "turn.started",
+                "turnId": child_turn.id,
+                "summary": format!("子 Agent 开始：{}", target_profile.name),
+                "status": child_turn.status,
+                "payload": {
+                    "agentMode": child_mode,
+                    "userContent": task,
+                    "agentName": target_profile.name,
+                    "parentTurnId": parent_turn_id,
+                    "delegated": true,
+                },
+                "timestamp": child_turn.started_at,
+            }),
+        );
+    }
+
+    let result = std::pin::Pin::from(Box::new(agent_loop(
+        state,
+        session_id,
+        &child_turn_id,
+        task,
+        Some(&child_profile),
+        llm_config,
+        app_handle.as_ref(),
+        false,
+    )))
+    .await
+    .map_err(|err| format!("子 Agent 调用失败: {}", err))?;
+
+    if let Some(handle) = app_handle.as_ref() {
+        let completed_turn = state.runtime.finish_turn(
+            session_id,
+            &child_turn_id,
+            &result.content,
+            result.executions.len(),
+        )?;
+        let _ = handle.emit(
+            "runtime-event",
+            serde_json::json!({
+                "sessionId": session_id,
+                "kind": "turn.completed",
+                "turnId": completed_turn.id,
+                "summary": format!("子 Agent 完成：{}", target_profile.name),
+                "status": completed_turn.status,
+                "payload": {
+                    "executionCount": completed_turn.execution_count,
+                    "assistantContent": result.content,
+                    "parentTurnId": parent_turn_id,
+                    "delegated": true,
+                    "agentName": target_profile.name,
+                },
+                "timestamp": completed_turn.finished_at,
+            }),
+        );
+    }
+
+    let executions = result
+        .executions
+        .iter()
+        .map(|item| {
+            serde_json::json!({
+                "capability": item.capability,
+                "status": item.status,
+                "input": item.input,
+                "output": item.output,
+                "error": item.error,
+                "durationMs": item.duration_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(serde_json::json!({
+        "agentId": target_profile.id,
+        "agentName": target_profile.name,
+        "role": target_profile.role,
+        "task": task,
+        "content": result.content,
+        "reasoningContent": result.reasoning_content,
+        "executionCount": result.executions.len(),
+        "executions": executions,
+    }))
 }
 
 fn build_memory_context(
@@ -659,13 +843,18 @@ fn augment_tool_params(
     mut params: serde_json::Value,
     session_id: &str,
     turn_id: &str,
+    current_agent_id: Option<&str>,
 ) -> serde_json::Value {
-    if tool_name != "checklist_write" {
-        return params;
-    }
     if let Some(obj) = params.as_object_mut() {
-        obj.insert("session_id".into(), serde_json::Value::String(session_id.to_string()));
-        obj.insert("turn_id".into(), serde_json::Value::String(turn_id.to_string()));
+        if matches!(tool_name, "checklist_write" | "agent_list" | "agent_delegate") {
+            obj.insert("session_id".into(), serde_json::Value::String(session_id.to_string()));
+            obj.insert("turn_id".into(), serde_json::Value::String(turn_id.to_string()));
+        }
+        if matches!(tool_name, "agent_list" | "agent_delegate")
+            && let Some(agent_id) = current_agent_id
+        {
+            obj.insert("currentAgentId".into(), serde_json::Value::String(agent_id.to_string()));
+        }
     }
     params
 }
@@ -686,6 +875,38 @@ fn preview_text(value: &str, max_chars: usize) -> String {
     }
     let preview: String = value.chars().take(max_chars).collect();
     format!("{}… (+{} chars)", preview, total_chars - max_chars)
+}
+
+fn build_delegate_started_payload(params: &serde_json::Value) -> Option<serde_json::Value> {
+    let target_agent_id = params.get("targetAgentId")?.as_str()?.trim();
+    if target_agent_id.is_empty() {
+        return None;
+    }
+    let task = params
+        .get("task")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let target_agent_name = params
+        .get("targetAgentName")
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+
+    Some(serde_json::json!({
+        "targetAgentId": target_agent_id,
+        "targetAgentName": target_agent_name,
+        "task": task,
+    }))
+}
+
+fn parse_delegate_payload(output: Option<&str>) -> Option<serde_json::Value> {
+    let output = output?.trim();
+    if output.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(output).ok()
 }
 
 pub fn resolve_turn_memory_source(
@@ -837,24 +1058,21 @@ async fn chat_with_streaming(
     messages: &[ChatMessage],
     tools: &[ToolDef],
     app_handle: &tauri::AppHandle,
+    stream_chat: bool,
     state: &AppState,
     session_id: &str,
     turn_id: &str,
     turn_started: &Instant,
 ) -> std::result::Result<(ChatResponse, HashMap<String, tools::ExecuteResult>), LlmError> {
     use futures::StreamExt;
-    use std::collections::{HashMap as StdHashMap, HashSet};
+    use std::collections::HashMap as StdHashMap;
 
     let mut stream = provider.chat_stream(messages, tools).await?;
     let mut full_content = String::new();
     let mut full_reasoning = String::new();
     let mut tool_call_parts: StdHashMap<usize, ToolCall> = StdHashMap::new();
-    let mut early_started: HashSet<String> = HashSet::new();
     let mut first_token_recorded = false;
     let mut first_tool_call_recorded = false;
-
-    // Track early-executed tool calls spawned during streaming
-    let mut early_handles: Vec<(String, tokio::task::JoinHandle<tools::ExecuteResult>)> = Vec::new();
 
     while let Some(chunk) = stream.next().await {
         match chunk {
@@ -924,74 +1142,37 @@ async fn chat_with_streaming(
                                 let _ = app_handle.emit("runtime-event", &event);
                             }
                         }
-                        let is_readonly = state
-                            .capabilities
-                            .get(&entry.function.name)
-                            .map(|c| matches!(c.risk_level, RiskLevel::ReadOnly))
-                            .unwrap_or(false);
-
-                        if is_readonly && early_started.insert(entry.id.clone()) {
-                            if let Ok(event) = state.runtime.record_event(
-                                session_id,
-                                Some(turn_id),
-                                "tool.started",
-                                &format!("{} 提前执行", entry.function.name),
-                                serde_json::json!({
-                                    "capability": entry.function.name,
-                                    "inputPreview": preview_text(&entry.function.arguments, 256),
-                                    "toolCallId": entry.id,
-                                    "early": true,
-                                }),
-                            ) {
-                                let _ = app_handle.emit("runtime-event", &event);
-                            }
-                            let state_clone = state.clone();
-                            let cap_name = entry.function.name.clone();
-                            let tc_id = entry.id.clone();
-                            let handle = tokio::spawn(async move {
-                                tools::dispatch_tool(
-                                    &state_clone,
-                                    ExecuteRequest {
-                                        capability: cap_name,
-                                        params,
-                                    },
-                                )
-                                .await
-                            });
-                            early_handles.push((tc_id, handle));
-                        }
+                        let _ = params;
                     }
                 }
 
                 // Emit to frontend (content only)
-                let _ = app_handle.emit("chat-stream", &c);
+                if stream_chat {
+                    let _ = app_handle.emit("chat-stream", &c);
+                }
 
                 if c.done {
                     break;
                 }
             }
             Err(e) => {
-                let _ = app_handle.emit(
-                    "chat-stream",
-                    &ChatStreamChunk {
-                        content_delta: Some(format!("\n[错误: {}]", e)),
-                        reasoning_delta: None,
-                        tool_call_delta: None,
-                        done: true,
-                    },
-                );
+                if stream_chat {
+                    let _ = app_handle.emit(
+                        "chat-stream",
+                        &ChatStreamChunk {
+                            content_delta: Some(format!("\n[错误: {}]", e)),
+                            reasoning_delta: None,
+                            tool_call_delta: None,
+                            done: true,
+                        },
+                    );
+                }
                 return Err(e);
             }
         }
     }
 
-    // Collect early execution results (tasks ran concurrently with streaming, likely done)
-    let mut early_cache: HashMap<String, tools::ExecuteResult> = HashMap::new();
-    for (tc_id, handle) in early_handles {
-        if let Ok(result) = handle.await {
-            early_cache.insert(tc_id, result);
-        }
-    }
+    let early_cache: HashMap<String, tools::ExecuteResult> = HashMap::new();
 
     let mut ordered_parts: Vec<(usize, ToolCall)> = tool_call_parts.into_iter().collect();
     ordered_parts.sort_by_key(|(index, _)| *index);

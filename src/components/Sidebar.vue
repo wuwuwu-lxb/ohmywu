@@ -12,6 +12,7 @@ const iconMap = computed<Record<string, string>>(() => ({
   chat: "M4 5.5h8M4 8.5h5m-4.5 4 1.8-2.4a1 1 0 0 1 .8-.4H12a2 2 0 0 0 2-2v-6A2 2 0 0 0 12 2H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h.6a1 1 0 0 1 .8.4Z",
   agents: "M5 5.5a2 2 0 1 1 0-4 2 2 0 0 1 0 4Zm6 1a1.75 1.75 0 1 0 0-3.5A1.75 1.75 0 0 0 11 6.5ZM2.5 13a2.5 2.5 0 0 1 5 0M8.5 13a2.5 2.5 0 0 1 5 0",
   wiki: "M4 2.5h7.5A2.5 2.5 0 0 1 14 5v7.5A1.5 1.5 0 0 1 12.5 14H5a3 3 0 0 0-3 3V5.5A3 3 0 0 1 5 2.5Zm0 0A2.5 2.5 0 0 0 1.5 5V14",
+  models: "M3 3.5h10v9H3zm2 2h6m-6 2.5h4m-4 2.5h5",
   atomic: "M8 1.75 9.1 3.2l1.75.25.8 1.55-1.15 1.35.25 1.75-1.55.8L8 7.75l-1.2 1.15-1.55-.8.25-1.75L4.35 5l.8-1.55L6.9 3.2 8 1.75Zm0 8.5a2.25 2.25 0 1 0 0 4.5 2.25 2.25 0 0 0 0-4.5Z",
   actions: "M8.5 1.5 3 8h3l-.5 6.5L11 8H8l.5-6.5Z",
   audit: "M4 3.5h8M4 6.5h8M4 9.5h5m3 2.5 1.2 1.2L15.5 11M13 14a2 2 0 1 1 0-4 2 2 0 0 1 0 4ZM3.5 2h9A1.5 1.5 0 0 1 14 3.5v5",
@@ -89,17 +90,9 @@ const iconMap = computed<Record<string, string>>(() => ({
   min-width: 0;
   background: var(--shell-bg);
   border-right: 1px solid var(--border-color);
-  backdrop-filter: blur(var(--shell-blur));
-  -webkit-backdrop-filter: blur(var(--shell-blur));
   transition: width var(--duration-normal) var(--ease-in-out), background 0.3s ease;
   overflow: hidden;
-  animation: slideIn 0.4s var(--ease-out);
   box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02);
-}
-
-@keyframes slideIn {
-  from { transform: translateX(-20px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
 }
 
 .sidebar.collapsed {

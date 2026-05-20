@@ -292,8 +292,6 @@ watch(open, async (value) => {
   border: 1px solid rgba(var(--accent-rgb), 0.16);
   background: rgba(14, 18, 26, 0.98);
   box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
   overscroll-behavior: contain;
 }
 

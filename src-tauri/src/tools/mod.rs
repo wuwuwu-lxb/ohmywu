@@ -16,7 +16,17 @@ use tokio::task;
 
 use ohmywu_domain::{AgentMode, RiskLevel};
 
+use crate::action_catalog::ActionUpsertInput;
+use crate::agent_catalog::AgentUpsertInput;
+use crate::capabilities::CapabilityUpsertInput;
 use crate::AppState;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDelegateInput {
+    target_agent_id: String,
+    task: String,
+}
 
 // ── Shared types ─────────────────────────────────────────────────
 
@@ -83,8 +93,12 @@ pub fn tool_kind(state: &AppState, name: &str) -> Option<ToolKind> {
 use ohmywu_llm_adapter::types::{FunctionDef, ToolDef};
 
 /// Generate LLM tool definitions from all registered capabilities.
-pub fn active_tool_defs(state: &AppState) -> Vec<ToolDef> {
-    let caps = state.capabilities.list();
+pub fn active_tool_defs(state: &AppState, allowed_tools: Option<&[String]>) -> Vec<ToolDef> {
+    let caps = state
+        .capability_catalog
+        .read()
+        .map(|catalog| catalog.active_entries())
+        .unwrap_or_default();
     let agent_mode = state
         .config
         .read()
@@ -92,9 +106,18 @@ pub fn active_tool_defs(state: &AppState) -> Vec<ToolDef> {
         .unwrap_or(AgentMode::Agent);
     let mut tools: Vec<ToolDef> = caps
         .iter()
-        .filter(|cap| tool_visible_in_mode(&cap.name, cap.risk_level, agent_mode))
+        .filter(|cap| {
+            if is_system_capability(&cap.name) || is_system_capability(&cap.implementation) {
+                return true;
+            }
+            allowed_tools.is_none_or(|tools| {
+                tools.is_empty()
+                    || tools.iter().any(|item| item == &cap.name || item == &cap.implementation)
+            })
+        })
+        .filter(|cap| tool_visible_in_mode(&cap.implementation, cap.risk_level, agent_mode))
         .filter_map(|cap| {
-            let params = tool_params(&cap.name)?;
+            let params = tool_params(&cap.implementation)?;
             Some(ToolDef {
                 tool_type: "function".into(),
                 function: FunctionDef {
@@ -112,7 +135,9 @@ pub fn active_tool_defs(state: &AppState) -> Vec<ToolDef> {
         let b_risk = caps.iter().find(|c| c.name == b.function.name);
         let a_score = a_risk.map_or(0, |c| risk_sort_key(c.risk_level));
         let b_score = b_risk.map_or(0, |c| risk_sort_key(c.risk_level));
-        a_score.cmp(&b_score)
+        a_score
+            .cmp(&b_score)
+            .then_with(|| a.function.name.cmp(&b.function.name))
     });
 
     tools
@@ -124,6 +149,10 @@ fn risk_sort_key(level: RiskLevel) -> u8 {
         RiskLevel::ControlledWrite => 1,
         RiskLevel::HighRisk => 2,
     }
+}
+
+fn is_system_capability(name: &str) -> bool {
+    matches!(name, "thinking" | "checklist_write")
 }
 
 /// Return the JSON Schema parameters for a given tool/capability name.
@@ -281,6 +310,72 @@ pub fn tool_params(name: &str) -> Option<serde_json::Value> {
             "type": "object",
             "properties": {}
         })),
+        "capability_list" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })),
+        "capability_register" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "existingName": { "type": ["string", "null"], "description": "Existing capability name when updating" },
+                "name": { "type": "string", "description": "New capability name" },
+                "title": { "type": "string", "description": "Human-readable capability title" },
+                "description": { "type": "string", "description": "Capability usage description" },
+                "riskLevel": { "type": "string", "enum": ["ReadOnly", "ControlledWrite", "HighRisk"] },
+                "implementation": { "type": "string", "description": "Underlying builtin capability to wrap" },
+                "enabled": { "type": "boolean", "description": "Whether to enable immediately" }
+            },
+            "required": ["name", "title", "description", "riskLevel", "implementation", "enabled"]
+        })),
+        "action_list" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })),
+        "action_register" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "existingId": { "type": ["string", "null"], "description": "Existing action id when updating" },
+                "id": { "type": "string", "description": "Stable action id" },
+                "title": { "type": "string", "description": "Human-readable title" },
+                "description": { "type": "string", "description": "One-line action summary" },
+                "capabilities": { "type": "array", "items": { "type": "string" }, "description": "Capability names used by this action" },
+                "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags" },
+                "prompt": { "type": "string", "description": "Compiled action prompt or transformed skill body" },
+                "supportingFiles": { "type": "array", "items": { "type": "string" }, "description": "Relevant files that support the action" },
+                "sourceHint": { "type": ["string", "null"], "description": "Original skill path, repo url, or note" },
+                "enabled": { "type": "boolean", "description": "Whether to enable immediately" }
+            },
+            "required": ["id", "title", "description", "capabilities", "prompt", "enabled"]
+        })),
+        "agent_list" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {}
+        })),
+        "agent_delegate" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "targetAgentId": { "type": "string", "description": "Target agent id to delegate to" },
+                "task": { "type": "string", "description": "Bounded subtask for the target agent" }
+            },
+            "required": ["targetAgentId", "task"]
+        })),
+        "agent_register" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "existingId": { "type": ["string", "null"], "description": "Existing agent id when updating" },
+                "id": { "type": "string", "description": "Stable agent id" },
+                "name": { "type": "string", "description": "Human-readable agent name" },
+                "role": { "type": "string", "description": "Agent responsibility boundary" },
+                "persona": { "type": "string", "description": "Execution persona and style" },
+                "memoryScope": { "type": "string", "description": "Serialized memory scope JSON string" },
+                "tools": { "type": "array", "items": { "type": "string" }, "description": "Capability names this agent may use" },
+                "delegateTags": { "type": "array", "items": { "type": "string" }, "description": "Short keywords used to recommend this agent for delegation" },
+                "delegateNote": { "type": "string", "description": "Human-readable note describing when this agent should be delegated to" },
+                "delegatable": { "type": "boolean", "description": "Whether this agent should appear in agent_list and be available for agent_delegate" },
+                "delegatePriority": { "type": "integer", "description": "Delegation priority from 0 to 100. Higher values appear earlier in candidate lists." }
+            },
+            "required": ["id", "name", "role", "persona", "memoryScope", "tools", "delegatable", "delegatePriority"]
+        })),
         _ => None,
     }
 }
@@ -296,7 +391,12 @@ pub async fn dispatch_tool(
     let params = request.params.clone();
 
     // 1. capability lookup
-    let cap = match state.capabilities.get(&cap_name) {
+    let cap = match state
+        .capability_catalog
+        .read()
+        .ok()
+        .and_then(|catalog| catalog.resolve_active(&cap_name))
+    {
         Some(c) => c,
         None => {
             return ExecuteResult {
@@ -316,7 +416,7 @@ pub async fn dispatch_tool(
         .read()
         .map(|cfg| cfg.agent_mode)
         .unwrap_or(AgentMode::Agent);
-    if !tool_allowed_in_mode(&cap_name, cap.risk_level, agent_mode) {
+    if !tool_allowed_in_mode(&cap.implementation, cap.risk_level, agent_mode) {
         return ExecuteResult {
             capability: cap_name,
             status: "denied".into(),
@@ -355,7 +455,7 @@ pub async fn dispatch_tool(
         let cfg = state.config.read().unwrap();
         crate::permission::check_permission(
             &cfg.permissions,
-            &cap_name,
+            &cap.implementation,
             &params,
             Some(ToolKind::from_risk(cap.risk_level)),
             agent_mode,
@@ -398,22 +498,36 @@ pub async fn dispatch_tool(
     }
 
     // 4. task creation
-    let target = describe_target(&cap_name, &params);
+    let target = describe_target(&cap.implementation, &params);
     let task = state.tasks.create(&cap_name, &target);
     let task_id = task.id.clone();
 
     // 4. execute (with spawn_blocking + timeout)
     let start = Instant::now();
 
-    let exec_result: Result<ExecOutput, String> = if cap_name == "thinking" {
+    let exec_result: Result<ExecOutput, String> = if cap.implementation == "thinking" {
         // thinking is instant, no blocking needed
         thinking::execute(&params)
-    } else if cap_name == "checklist_write" {
+    } else if cap.implementation == "checklist_write" {
         checklist::write(&params, &state.runtime)
-    } else if cap_name.starts_with("wiki_") {
+    } else if cap.implementation == "capability_list" {
+        execute_capability_list(state)
+    } else if cap.implementation == "capability_register" {
+        execute_capability_register(state, &params)
+    } else if cap.implementation == "action_list" {
+        execute_action_list(state)
+    } else if cap.implementation == "action_register" {
+        execute_action_register(state, &params)
+    } else if cap.implementation == "agent_list" {
+        execute_agent_list(state, &params)
+    } else if cap.implementation == "agent_delegate" {
+        execute_agent_delegate(state, &params).await
+    } else if cap.implementation == "agent_register" {
+        execute_agent_register(state, &params)
+    } else if cap.implementation.starts_with("wiki_") {
         // wiki tools: read/write/search/list/graph — fast file I/O
         let wiki_lock = state.wiki.read().unwrap();
-        match cap_name.as_str() {
+        match cap.implementation.as_str() {
             "wiki_read" => wiki::read(&params, &wiki_lock),
             "wiki_write" => wiki::write(&params, &wiki_lock),
             "wiki_search" => wiki::search(&params, &wiki_lock),
@@ -422,7 +536,7 @@ pub async fn dispatch_tool(
             other => Err(format!("Unknown capability: {}", other)),
         }
     } else {
-        let cap_name_clone = cap_name.clone();
+        let cap_name_clone = cap.implementation.clone();
         let params_clone = params.clone();
         let future = task::spawn_blocking(move || -> Result<ExecOutput, String> {
             match cap_name_clone.as_str() {
@@ -527,12 +641,32 @@ fn describe_target(cap: &str, params: &serde_json::Value) -> String {
             .and_then(|v| v.as_str())
             .unwrap_or("current checklist")
             .to_string(),
+        "capability_register" => params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no name)")
+            .to_string(),
+        "action_register" => params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no id)")
+            .to_string(),
+        "agent_delegate" => params
+            .get("targetAgentId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no target)")
+            .to_string(),
+        "agent_register" => params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no id)")
+            .to_string(),
         _ => format!("{:?}", params),
     }
 }
 
-fn tool_visible_in_mode(name: &str, risk: RiskLevel, mode: AgentMode) -> bool {
-    if name == "checklist_write" {
+fn tool_visible_in_mode(implementation: &str, risk: RiskLevel, mode: AgentMode) -> bool {
+    if implementation == "checklist_write" {
         return true;
     }
     match mode {
@@ -541,8 +675,8 @@ fn tool_visible_in_mode(name: &str, risk: RiskLevel, mode: AgentMode) -> bool {
     }
 }
 
-fn tool_allowed_in_mode(name: &str, risk: RiskLevel, mode: AgentMode) -> bool {
-    if name == "checklist_write" {
+fn tool_allowed_in_mode(implementation: &str, risk: RiskLevel, mode: AgentMode) -> bool {
+    if implementation == "checklist_write" {
         return true;
     }
     match mode {
@@ -569,4 +703,198 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
         format!("{}\n... [truncated {} chars]",
             truncated, s.chars().count())
     }
+}
+
+fn execute_capability_list(state: &AppState) -> Result<ExecOutput, String> {
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    let views = catalog.list_views();
+    let output = serde_json::to_string_pretty(&views)
+        .map_err(|e| format!("Serialize capabilities: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_capability_register(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let input: CapabilityUpsertInput = serde_json::from_value(params.clone())
+        .map_err(|e| format!("Parse capability_register params: {}", e))?;
+    let mut catalog = state
+        .capability_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input)?;
+    catalog.sync_registry(&state.capabilities);
+    drop(catalog);
+    crate::sync_action_registry(state)?;
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    let output = serde_json::to_string_pretty(&catalog.list_views())
+        .map_err(|e| format!("Serialize capabilities: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_action_list(state: &AppState) -> Result<ExecOutput, String> {
+    let active_capabilities: std::collections::HashSet<String> = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .active_names()
+        .into_iter()
+        .collect();
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    let views = catalog.list_views(&active_capabilities);
+    let output = serde_json::to_string_pretty(&views)
+        .map_err(|e| format!("Serialize actions: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_action_register(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let input: ActionUpsertInput = serde_json::from_value(params.clone())
+        .map_err(|e| format!("Parse action_register params: {}", e))?;
+    let known_capabilities: std::collections::HashSet<String> = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .all_names()
+        .into_iter()
+        .collect();
+    let mut catalog = state
+        .action_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input, &known_capabilities)?;
+    drop(catalog);
+    crate::sync_action_registry(state)?;
+    let active_capabilities: std::collections::HashSet<String> = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .active_names()
+        .into_iter()
+        .collect();
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    let output = serde_json::to_string_pretty(&catalog.list_views(&active_capabilities))
+        .map_err(|e| format!("Serialize actions: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_agent_list(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let session_id = params
+        .get("session_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "agent_list 缺少 session_id".to_string())?;
+    let current_agent_id = params
+        .get("currentAgentId")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let profiles = state
+        .get_delegatable_session_agents(session_id)
+        .into_iter()
+        .filter(|profile| profile.id != current_agent_id)
+        .collect::<Vec<_>>();
+    let output = serde_json::to_string_pretty(&profiles)
+        .map_err(|e| format!("Serialize agent profiles: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+async fn execute_agent_delegate(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let session_id = params
+        .get("session_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "agent_delegate 缺少 session_id".to_string())?;
+    let turn_id = params
+        .get("turn_id")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "agent_delegate 缺少 turn_id".to_string())?;
+    let input: AgentDelegateInput = serde_json::from_value(params.clone())
+        .map_err(|e| format!("Parse agent_delegate params: {}", e))?;
+    let current_agent_id = params
+        .get("currentAgentId")
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    if !current_agent_id.is_empty() && current_agent_id == input.target_agent_id {
+        return Err("不能把任务委派给当前 agent 自己".into());
+    }
+
+    let target = state
+        .get_delegatable_session_agents(session_id)
+        .into_iter()
+        .find(|profile| profile.id == input.target_agent_id)
+        .ok_or_else(|| format!("未找到 agent '{}'", input.target_agent_id))?;
+
+    let llm_config = {
+        let cfg = state.config.read().map_err(|e| format!("Lock: {}", e))?;
+        cfg.active_llm_config()
+            .ok_or_else(|| "当前未配置模型，无法委派子 Agent".to_string())?
+    };
+
+    let payload = crate::agent::delegate_to_agent(
+        state,
+        session_id,
+        turn_id,
+        &target,
+        &input.task,
+        &llm_config,
+    )
+    .await?;
+    let output = serde_json::to_string_pretty(&payload)
+        .map_err(|e| format!("Serialize delegated agent result: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_agent_register(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let input: AgentUpsertInput = serde_json::from_value(params.clone())
+        .map_err(|e| format!("Parse agent_register params: {}", e))?;
+    let known_capabilities: std::collections::HashSet<String> = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .all_names()
+        .into_iter()
+        .collect();
+    let mut catalog = state
+        .agent_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input, &known_capabilities)?;
+    let output = serde_json::to_string_pretty(&catalog.list_views())
+        .map_err(|e| format!("Serialize agents: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
 }

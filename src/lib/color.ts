@@ -46,6 +46,34 @@ export const rgbToHsl = (r: number, g: number, b: number) => {
   return { h: hue / 6, s: saturation, l: lightness }
 }
 
+export const rgbToHsv = (r: number, g: number, b: number) => {
+  const nr = r / 255
+  const ng = g / 255
+  const nb = b / 255
+  const max = Math.max(nr, ng, nb)
+  const min = Math.min(nr, ng, nb)
+  const delta = max - min
+
+  let hue = 0
+  if (delta !== 0) {
+    switch (max) {
+      case nr:
+        hue = (ng - nb) / delta + (ng < nb ? 6 : 0)
+        break
+      case ng:
+        hue = (nb - nr) / delta + 2
+        break
+      default:
+        hue = (nr - ng) / delta + 4
+        break
+    }
+    hue /= 6
+  }
+
+  const saturation = max === 0 ? 0 : delta / max
+  return { h: hue, s: saturation, v: max }
+}
+
 const hueToRgb = (p: number, q: number, t: number) => {
   let next = t
   if (next < 0) next += 1
@@ -69,6 +97,44 @@ export const hslToRgb = (h: number, s: number, l: number) => {
     r: Math.round(hueToRgb(p, q, h + 1 / 3) * 255),
     g: Math.round(hueToRgb(p, q, h) * 255),
     b: Math.round(hueToRgb(p, q, h - 1 / 3) * 255),
+  }
+}
+
+export const hsvToRgb = (h: number, s: number, v: number) => {
+  const hue = ((h % 1) + 1) % 1
+  const c = v * s
+  const scaled = hue * 6
+  const x = c * (1 - Math.abs((scaled % 2) - 1))
+  const m = v - c
+
+  let r = 0
+  let g = 0
+  let b = 0
+
+  if (scaled < 1) {
+    r = c
+    g = x
+  } else if (scaled < 2) {
+    r = x
+    g = c
+  } else if (scaled < 3) {
+    g = c
+    b = x
+  } else if (scaled < 4) {
+    g = x
+    b = c
+  } else if (scaled < 5) {
+    r = x
+    b = c
+  } else {
+    r = c
+    b = x
+  }
+
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
   }
 }
 

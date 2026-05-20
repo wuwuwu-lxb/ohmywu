@@ -1,10 +1,18 @@
 export type ToolRisk = "ReadOnly" | "ControlledWrite" | "HighRisk"
 export type ToolStatus = "running" | "success" | "failed" | "denied" | "needs_confirm"
+export type CapabilitySource = "builtin" | "user"
 
 export interface CapabilityInfo {
   name: string
+  title: string
   description: string
   risk_level: ToolRisk
+  implementation: string
+  source: CapabilitySource
+  enabled: boolean
+  editable: boolean
+  deletable: boolean
+  executable: boolean
 }
 
 export interface ToolMeta {
@@ -99,6 +107,48 @@ const TOOL_META: Record<string, ToolMeta> = {
     detail: "返回知识节点和关联边，适合后续做记忆与关系视图。",
     example: "条目关联图",
   },
+  capability_list: {
+    label: "能力目录读取",
+    short: "列出全部原子化能力",
+    detail: "读取当前 capability 注册目录，包括内置能力和用户包装层。",
+    example: "查看现有能力清单",
+  },
+  capability_register: {
+    label: "能力目录注册",
+    short: "注册或更新原子化能力",
+    detail: "把重复使用的操作模式包装成新的 capability，写入能力目录并同步到运行时。",
+    example: "注册 project_read_docs",
+  },
+  action_list: {
+    label: "Action 目录读取",
+    short: "列出全部 action",
+    detail: "读取当前 action 注册目录，包括 system action 和用户定义 action。",
+    example: "查看 action 清单",
+  },
+  action_register: {
+    label: "Action 目录注册",
+    short: "注册或更新 action",
+    detail: "将 workflow、prompt 或外部 skill 转换成 action，并同步到 action 注册目录。",
+    example: "把某个 SKILL.md 转成 action",
+  },
+  agent_list: {
+    label: "Agent 目录读取",
+    short: "列出当前可委派的 Agent",
+    detail: "读取当前会话中的 agent 配置，返回人格、记忆范围和工具范围，供主 Agent 做委派决策。",
+    example: "查看当前 agent 清单",
+  },
+  agent_delegate: {
+    label: "Agent 子任务委派",
+    short: "把子任务交给另一个 Agent",
+    detail: "选择目标 agent 并委派一段边界清晰的子任务，返回该 agent 的结构化结果与工具执行记录。",
+    example: "委派 coder agent 检查构建错误",
+  },
+  agent_register: {
+    label: "Agent 目录注册",
+    short: "注册或更新 agent",
+    detail: "把稳定的人格、记忆范围和工具边界写入 agent 目录，供前端管理页和主 agent 委派链路复用。",
+    example: "注册 research_agent",
+  },
 }
 
 export function getToolMeta(name: string): ToolMeta {
@@ -121,6 +171,17 @@ export function toolRiskLabel(risk: ToolRisk): string {
       return "高风险"
     default:
       return risk
+  }
+}
+
+export function capabilitySourceLabel(source: CapabilitySource): string {
+  switch (source) {
+    case "builtin":
+      return "内置"
+    case "user":
+      return "用户"
+    default:
+      return source
   }
 }
 

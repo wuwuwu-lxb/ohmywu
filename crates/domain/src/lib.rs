@@ -91,10 +91,32 @@ impl Action {
         }
     }
 
+    pub fn user(
+        id: &str,
+        title: &str,
+        description: &str,
+        capabilities: &[String],
+        tags: &[String],
+        available: bool,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            title: title.to_string(),
+            description: description.to_string(),
+            source: ActionSource::User,
+            capabilities: capabilities.to_vec(),
+            tags: tags.to_vec(),
+            path: None,
+            entry: None,
+            available,
+        }
+    }
+
     pub fn sort_key(&self) -> (u8, String, String) {
         let source_rank = match self.source {
             ActionSource::Builtin => 0,
-            ActionSource::Skill => 1,
+            ActionSource::User => 1,
+            ActionSource::Skill => 2,
         };
         (source_rank, self.title.to_lowercase(), self.id.to_lowercase())
     }
@@ -104,6 +126,7 @@ impl Action {
 #[serde(rename_all = "snake_case")]
 pub enum ActionSource {
     Builtin,
+    User,
     Skill,
 }
 
@@ -111,6 +134,7 @@ impl ActionSource {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Builtin => "builtin",
+            Self::User => "user",
             Self::Skill => "skill",
         }
     }

@@ -6,6 +6,7 @@ pub fn ensure_data_dirs() -> Result<PathBuf, String> {
     let dirs = [
         "sessions",
         "actions",
+        "capabilities",
         "wiki",
         "runtime/threads",
         "runtime/turns",

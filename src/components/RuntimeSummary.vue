@@ -17,6 +17,10 @@ const toolCount = computed(() =>
   props.runtime.tools.length || props.runtime.turn.executionCount
 )
 
+const delegationCount = computed(() =>
+  props.runtime.tools.filter((tool) => !!tool.delegated).length
+)
+
 const elapsedLabel = computed(() => {
   const started = Date.parse(props.runtime.turn.startedAt)
   const finished = props.runtime.turn.finishedAt
@@ -95,6 +99,34 @@ const latestMemorySaved = computed(() =>
     .reverse()
     .find((event) => event.kind === "memory.saved")
 )
+
+function runtimeStatusLabel(status: string) {
+  switch (status) {
+    case "completed":
+      return "已完成"
+    case "running":
+      return "进行中"
+    default:
+      return status
+  }
+}
+
+function runtimeElapsedLabel(startedAt: string, finishedAt?: string | null) {
+  const started = Date.parse(startedAt)
+  const finished = finishedAt ? Date.parse(finishedAt) : Date.now()
+  if (Number.isNaN(started) || Number.isNaN(finished) || finished < started) {
+    return null
+  }
+  const ms = finished - started
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
+}
+
+function childWaitingLabel(runtime: RuntimeTurnView) {
+  const lastEvent = runtime.events[runtime.events.length - 1]
+  if (!lastEvent) return "等待工具调用"
+  return lastEvent.summary
+}
 </script>
 
 <template>
@@ -110,6 +142,7 @@ const latestMemorySaved = computed(() =>
         <span class="runtime-title">Runtime</span>
         <span class="runtime-pill">{{ statusLabel }}</span>
         <span class="runtime-meta">{{ toolCount }} 个工具</span>
+        <span v-if="delegationCount" class="runtime-meta">{{ delegationCount }} 次委派</span>
         <span v-if="elapsedLabel" class="runtime-meta">{{ elapsedLabel }}</span>
         <span v-if="ttftLabel" class="runtime-meta">{{ ttftLabel }}</span>
         <span v-if="firstToolLabel" class="runtime-meta">{{ firstToolLabel }}</span>
@@ -141,6 +174,35 @@ const latestMemorySaved = computed(() =>
         <div v-if="latestMemorySaved" class="memory-runtime-line">
           <span class="runtime-section-title inline">知识库写入</span>
           <span>{{ latestMemorySaved.summary }}</span>
+        </div>
+      </div>
+
+      <div v-if="runtime.delegatedTurns.length" class="delegate-turn-list">
+        <div class="runtime-section-title">子 Agent</div>
+        <div
+          v-for="child in runtime.delegatedTurns"
+          :key="child.turn.id"
+          class="delegate-turn-card"
+        >
+          <div class="delegate-turn-head">
+            <div class="delegate-turn-main">
+              <span class="delegate-turn-name">{{ child.turn.agentName || "子 Agent" }}</span>
+              <span class="delegate-turn-status">{{ runtimeStatusLabel(child.turn.status) }}</span>
+              <span v-if="runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt)" class="delegate-turn-meta">
+                {{ runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt) }}
+              </span>
+            </div>
+            <div class="delegate-turn-task">{{ child.turn.userContent }}</div>
+          </div>
+
+          <div v-if="child.tools.length" class="delegate-turn-tools">
+            <ExecutionCard
+              v-for="(tool, index) in child.tools"
+              :key="`${child.turn.id}-${index}`"
+              :exec="tool"
+            />
+          </div>
+          <div v-else class="delegate-turn-empty">{{ childWaitingLabel(child) }}</div>
         </div>
       </div>
 
@@ -291,5 +353,66 @@ const latestMemorySaved = computed(() =>
   padding: 12px 4px 2px;
   color: var(--text-tertiary);
   font-size: 12px;
+}
+
+.delegate-turn-list {
+  margin-top: 10px;
+}
+
+.delegate-turn-card {
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.12);
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.delegate-turn-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.delegate-turn-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.delegate-turn-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.delegate-turn-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--text-primary);
+  font-size: 10px;
+}
+
+.delegate-turn-meta,
+.delegate-turn-task,
+.delegate-turn-empty {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+
+.delegate-turn-meta {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.delegate-turn-tools {
+  margin-top: 8px;
+}
+
+.delegate-turn-empty {
+  margin-top: 8px;
 }
 </style>

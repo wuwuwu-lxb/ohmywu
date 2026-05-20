@@ -96,6 +96,10 @@ fn params_as_string(tool_name: &str, params: &serde_json::Value) -> String {
         "glob" => params.get("pattern").and_then(|v| v.as_str()),
         "grep" => params.get("pattern").and_then(|v| v.as_str()),
         "web_fetch" => params.get("url").and_then(|v| v.as_str()),
+        "capability_register" => params.get("name").and_then(|v| v.as_str()),
+        "action_register" => params.get("id").and_then(|v| v.as_str()),
+        "agent_delegate" => params.get("targetAgentId").and_then(|v| v.as_str()),
+        "agent_register" => params.get("id").and_then(|v| v.as_str()),
         _ => None,
     }
     .unwrap_or("")

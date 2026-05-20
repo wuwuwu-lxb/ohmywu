@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue"
 import ChatMessage from "../components/ChatMessage.vue"
+import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
 import { useAgentStore } from "../stores/agents"
 import { useChatStore, type SessionSummary } from "../stores/chat"
@@ -9,12 +10,18 @@ const store = useChatStore()
 const agentStore = useAgentStore()
 const input = ref("")
 const chatEl = ref<HTMLElement>()
+const inputEl = ref<HTMLTextAreaElement>()
 const categoryInput = ref("")
 const renameDrafts = ref<Record<string, string>>({})
 const categoryDrafts = ref<Record<string, string>>({})
 const confirmingDeleteId = ref<string | null>(null)
 const sessionBusyId = ref<string | null>(null)
 const sessionActionMsg = ref("")
+const inputFocused = ref(false)
+const composing = ref(false)
+const deleteSessionTarget = computed(() =>
+  store.sessions.find((session) => session.id === confirmingDeleteId.value) || null
+)
 
 const emit = defineEmits<{
   "show-task": [taskId: string]
@@ -31,8 +38,8 @@ const renderedMessages = computed(() => {
     role: "agent" as const,
     content: store.streamingContent,
     turnId: store.activeTurnId,
-    agentName: currentAgent.value?.name || "OhMyWu",
-    agentIcon: "✦",
+    agentName: effectiveAgent.value?.name || "OhMyWu",
+    agentIcon: effectiveAgent.value?.id === "memory" ? "◎" : effectiveAgent.value?.id === "coder" ? "</>" : "✦",
     timestamp: Date.now(),
   }
 
@@ -53,8 +60,16 @@ const renderedMessages = computed(() => {
 })
 
 const currentAgent = computed(() =>
-  agentStore.agents.find((agent) => agent.id === agentStore.activeAgentId) || agentStore.agents[0]
+  agentStore.availableAgents.find((agent) => agent.id === agentStore.activeAgentId)
+  || agentStore.availableAgents[0]
 )
+
+const effectiveAgent = computed(() => currentAgent.value)
+
+const routeSubtitle = computed(() => {
+  if (store.pending) return "Thinking"
+  return currentAgent.value?.persona || currentAgent.value?.role || "Local desktop agent workspace"
+})
 
 const categoryTabs = computed(() => {
   const uncategorizedCount = store.sessions.filter((session) => !(session.category || "").trim()).length
@@ -100,7 +115,7 @@ const categoryOptions = computed(() => [
 ])
 
 const agentOptions = computed(() =>
-  agentStore.agents.map((agent) => ({
+  agentStore.availableAgents.map((agent) => ({
     label: agent.name,
     value: agent.id,
   }))
@@ -110,7 +125,8 @@ const send = async () => {
   const text = input.value.trim()
   if (!text || store.pending) return
   input.value = ""
-  await store.sendMessage(text, currentAgent.value)
+  await store.sendMessage(text, effectiveAgent.value, agentStore.availableAgents)
+  syncInputHeight()
   scroll()
 }
 
@@ -119,11 +135,34 @@ const scroll = async () => {
   if (chatEl.value) chatEl.value.scrollTop = chatEl.value.scrollHeight
 }
 
+const syncInputHeight = () => {
+  const el = inputEl.value
+  if (!el) return
+  el.style.height = "44px"
+  el.style.height = `${Math.min(el.scrollHeight, 180)}px`
+}
+
 const handleKeydown = (e: KeyboardEvent) => {
+  if (e.isComposing || composing.value) {
+    return
+  }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault()
     send()
   }
+}
+
+const handleInput = () => {
+  syncInputHeight()
+}
+
+const handleCompositionStart = () => {
+  composing.value = true
+}
+
+const handleCompositionEnd = () => {
+  composing.value = false
+  syncInputHeight()
 }
 
 const syncSessionDrafts = (sessions: SessionSummary[]) => {
@@ -235,6 +274,11 @@ const confirmDeleteSession = async (id: string) => {
   }
 }
 
+const confirmDeleteCurrentSession = async () => {
+  if (!confirmingDeleteId.value) return
+  await confirmDeleteSession(confirmingDeleteId.value)
+}
+
 watch(
   () => store.sessions,
   (sessions) => syncSessionDrafts(sessions),
@@ -250,9 +294,15 @@ watch(() => store.streamingContent, () => {
 watch(() => store.activeTurnId, () => {
   if (store.panel === "conversation") scroll()
 })
+watch(input, () => {
+  syncInputHeight()
+})
 
 onMounted(async () => {
+  await agentStore.init()
   await store.init()
+  await nextTick()
+  syncInputHeight()
   if (store.panel === "conversation") {
     scroll()
   }
@@ -301,7 +351,7 @@ onMounted(async () => {
           <div>
             <div class="manager-title">{{ currentCategoryLabel }}</div>
             <div class="manager-subtitle">
-              当前共 {{ store.filteredSessions.length }} 个对话。你可以在这里命名、分类、删除，再切回主对话页。
+              当前分类下共 {{ store.filteredSessions.length }} 个对话。
             </div>
           </div>
           <button
@@ -354,18 +404,7 @@ onMounted(async () => {
                   保存名称
                 </button>
 
-                <template v-if="confirmingDeleteId === session.id">
-                  <button
-                    class="danger-btn"
-                    :disabled="sessionBusyId === session.id"
-                    @click="confirmDeleteSession(session.id)"
-                  >
-                    确认删除
-                  </button>
-                  <button class="ghost-btn" @click="toggleDelete(session.id)">取消</button>
-                </template>
                 <button
-                  v-else
                   class="ghost-btn danger-ghost"
                   :disabled="sessionBusyId === session.id"
                   @click="toggleDelete(session.id)"
@@ -377,7 +416,7 @@ onMounted(async () => {
           </article>
 
           <div v-if="!store.filteredSessions.length" class="manager-empty">
-            当前分类还没有对话。你可以直接在这里新建一个。
+            当前分类暂无对话。
           </div>
         </div>
       </section>
@@ -399,18 +438,18 @@ onMounted(async () => {
                 <div class="empty-cover-mark">✦</div>
               </div>
               <div class="empty-copy">
-                <div class="empty-title">OhMyWu</div>
-                <div class="empty-desc">本地优先的桌面 Agent 工作台。你可以直接对话、读写本地内容、接入模型，或者把它当成一套可控执行面板。</div>
+                <div class="empty-title">开始新对话</div>
+                <div class="empty-desc">选择 Agent 后直接发送消息，工具调用和运行状态会同步显示在对话里。</div>
                 <div class="empty-meta">
-                  <span class="meta-pill">Local-first</span>
-                  <span class="meta-pill">Tool Calling</span>
-                  <span class="meta-pill">Auditable</span>
+                  <span class="meta-pill">Agent</span>
+                  <span class="meta-pill">Runtime</span>
+                  <span class="meta-pill">Audit</span>
                 </div>
               </div>
             </section>
 
             <section class="empty-side-card">
-              <div class="side-title">开始方式</div>
+              <div class="side-title">快速开始</div>
               <button class="hint" @click="input = '帮我看看当前目录有什么文件'">帮我看看当前目录有什么文件</button>
               <button class="hint" @click="input = '读取 README.md 并总结项目结构'">读取 README.md 并总结项目结构</button>
               <button class="hint" @click="input = '检查我现在配置的模型是否可用'">检查我现在配置的模型是否可用</button>
@@ -429,12 +468,14 @@ onMounted(async () => {
           :memory-saving="msg.turnId ? !!store.memorySaving[msg.turnId] : false"
           :memory-error="msg.turnId ? store.memoryErrors[msg.turnId] : null"
           :memory-saved="msg.turnId ? store.memorySaved[msg.turnId] : null"
+          :memory-collapsed="msg.turnId ? !!store.memoryCollapsed[msg.turnId] : false"
           :style="{ animationDelay: `${i * 15}ms` }"
           class="msg-animate"
           @show-task="(taskId: string) => emit('show-task', taskId)"
           @generate-memory="(turnId: string) => store.generateMemoryCandidate(turnId)"
           @save-memory="(turnId: string) => store.saveMemoryCandidate(turnId)"
           @clear-memory="(turnId: string) => store.clearMemoryCandidate(turnId)"
+          @reopen-memory="(turnId: string) => store.reopenMemoryCandidate(turnId)"
           @update-memory-candidate="({ turnId, patch }) => store.updateMemoryCandidate(turnId, patch)"
         />
       </div>
@@ -444,12 +485,10 @@ onMounted(async () => {
           <div class="composer-meta">
             <div class="composer-cover">✦</div>
             <div class="composer-copy">
-              <div class="composer-title">{{ currentAgent?.name || "OhMyWu" }}</div>
+              <div class="composer-title">{{ effectiveAgent?.name || "OhMyWu" }}</div>
               <div class="composer-subtitle">
                 {{
-                  store.pending
-                    ? "Thinking"
-                    : currentAgent?.persona || "Local desktop agent workspace"
+                  routeSubtitle
                 }}
               </div>
             </div>
@@ -478,13 +517,19 @@ onMounted(async () => {
         </div>
 
         <div class="input-row">
-          <div class="input-wrapper">
+          <div class="input-wrapper" :class="{ focused: inputFocused }">
             <textarea
+              ref="inputEl"
               v-model="input"
               class="chat-input"
               rows="1"
-              placeholder="输入消息，Enter 发送 · Shift+Enter 换行"
+              placeholder="输入消息"
               :disabled="store.pending"
+              @input="handleInput"
+              @focus="inputFocused = true"
+              @blur="inputFocused = false"
+              @compositionstart="handleCompositionStart"
+              @compositionend="handleCompositionEnd"
               @keydown="handleKeydown"
             />
           </div>
@@ -505,6 +550,15 @@ onMounted(async () => {
         </div>
       </div>
     </section>
+
+    <ConfirmDialog
+      :open="!!confirmingDeleteId"
+      title="删除对话"
+      :message="deleteSessionTarget ? `确定删除「${deleteSessionTarget.name}」吗？删除后将移除当前对话及其消息记录。` : '删除后将移除当前对话及其消息记录。'"
+      :loading="!!(confirmingDeleteId && sessionBusyId === confirmingDeleteId)"
+      @cancel="confirmingDeleteId = null"
+      @confirm="confirmDeleteCurrentSession"
+    />
   </div>
 </template>
 
@@ -977,8 +1031,6 @@ onMounted(async () => {
   padding: 14px 20px 18px;
   border-top: 1px solid var(--border-color);
   background: var(--shell-bg-soft);
-  backdrop-filter: blur(calc(var(--shell-blur) * 0.5));
-  -webkit-backdrop-filter: blur(calc(var(--shell-blur) * 0.5));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1079,6 +1131,113 @@ onMounted(async () => {
   width: 180px;
 }
 
+.route-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.route-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+}
+
+.route-chip {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.route-chip:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-2);
+}
+
+.route-chip.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--active-bg);
+}
+
+.route-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.route-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.delegate-select {
+  width: 220px;
+}
+
+.route-advice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.route-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.55;
+}
+
+.route-recommend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.route-recommend-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.route-recommend-chip {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.route-recommend-chip:hover {
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-rgb), 0.28);
+  background: rgba(var(--accent-rgb), 0.14);
+}
+
 .input-row {
   display: flex;
   align-items: flex-end;
@@ -1093,6 +1252,16 @@ onMounted(async () => {
   border: 1px solid var(--border-color);
   background: var(--surface-1);
   box-shadow: var(--shadow-surface);
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
+}
+
+.input-wrapper.focused {
+  border-color: rgba(var(--accent-rgb), 0.34);
+  background: rgba(var(--accent-rgb), 0.05);
+  box-shadow:
+    var(--shadow-surface),
+    0 0 0 1px rgba(var(--accent-rgb), 0.16),
+    0 0 0 4px rgba(var(--accent-rgb), 0.08);
 }
 
 .chat-input {
@@ -1107,6 +1276,8 @@ onMounted(async () => {
   font-size: 14px;
   line-height: 1.6;
   font-family: var(--font);
+  caret-color: var(--accent);
+  -webkit-user-modify: read-write-plaintext-only;
 }
 
 .chat-input::placeholder {
@@ -1182,7 +1353,14 @@ onMounted(async () => {
     width: 100%;
   }
 
-  .agent-select {
+  .agent-select,
+  .delegate-select {
+    width: 100%;
+  }
+
+  .route-bar,
+  .route-summary,
+  .route-advice {
     width: 100%;
   }
 

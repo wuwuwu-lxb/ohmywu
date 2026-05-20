@@ -1,34 +1,12 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue"
 import { convertFileSrc, invoke } from "@tauri-apps/api/core"
-import ThemeSelect from "../components/ThemeSelect.vue"
+import ColorPickerField from "../components/ColorPickerField.vue"
 import { useTheme } from "../composables/useTheme"
 import { useChatStore, type AgentMode } from "../stores/chat"
-import { BACKGROUND_PRESETS, THEME_PRESETS } from "../lib/theme"
 import type { CapabilityInfo, ToolRisk } from "../lib/tools"
-import type { BackgroundPreset, ThemePreset } from "../lib/theme"
 
 type PolicyMode = "Sandbox" | "Danger"
-
-interface ProviderInfo {
-  id: string
-  name: string
-  apiFormat: string
-  icon?: string
-  iconColor?: string
-  defaultModel: string
-  supportsTools: boolean
-  websiteUrl?: string
-}
-
-interface LlmConfig {
-  provider_type: string
-  api_format: string
-  endpoint: string
-  model: string
-  api_key?: string
-  max_tokens?: number
-}
 
 interface PermissionRule {
   effect: "allow" | "deny"
@@ -39,6 +17,7 @@ interface AppConfig {
   policy_mode: PolicyMode
   theme: string
   accent: string
+  background_solid_color: string
   background_preset: string
   background_mode: string
   surface_opacity: number
@@ -48,7 +27,6 @@ interface AppConfig {
   background_auto_theme: boolean
   background_theme_color?: string | null
   agent_mode: AgentMode
-  llm_provider: LlmConfig | null
   permissions: {
     rules: PermissionRule[]
   }
@@ -57,9 +35,8 @@ interface AppConfig {
 const chatStore = useChatStore()
 
 const {
-  preset,
   accent,
-  backgroundPreset,
+  backgroundSolidColor,
   backgroundMode,
   backgroundAutoTheme,
   backgroundThemeColor,
@@ -68,10 +45,9 @@ const {
   bgBlur,
   bgMaskOpacity,
   backgroundImageUrl,
-  setPreset,
   setAccent,
   setSurfaceOpacity,
-  setBackgroundPreset,
+  setBackgroundSolidColor,
   setBackgroundMode,
   setBgScale,
   setBgBlur,
@@ -81,21 +57,6 @@ const {
   syncBackgroundTheme,
   setBackgroundImage,
 } = useTheme()
-
-const presets = Object.entries(THEME_PRESETS) as [ThemePreset, { label: string; accent: string }][]
-const backgrounds = Object.entries(BACKGROUND_PRESETS) as [BackgroundPreset, { label: string; css: string }][]
-
-const PROVIDER_ENDPOINTS: Record<string, string> = {
-  openai: "https://api.openai.com/v1",
-  anthropic: "https://api.anthropic.com",
-  deepseek: "https://api.deepseek.com",
-  gemini: "https://generativelanguage.googleapis.com",
-  ollama: "http://localhost:11434",
-  moonshot: "https://api.moonshot.cn/v1",
-  zhipu: "https://open.bigmodel.cn/api/paas/v4",
-  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  minimax: "https://api.minimaxi.com/v1",
-}
 
 const policyModeOptions: Array<{ value: PolicyMode; label: string; note: string }> = [
   { value: "Sandbox", label: "Sandbox", note: "只允许只读工具，写入和命令直接被策略层拒绝。" },
@@ -107,14 +68,6 @@ const agentModeOptions: Array<{ value: AgentMode; label: string; note: string }>
   { value: "agent", label: "Agent", note: "暴露全部工具，高风险操作默认需要确认。" },
   { value: "auto", label: "Auto", note: "暴露全部工具，高风险操作也会直接执行。" },
 ]
-
-function defaultEndpointFor(id: string) {
-  return PROVIDER_ENDPOINTS[id] ?? ""
-}
-
-function needsKeyFor(id: string) {
-  return id !== "ollama"
-}
 
 function rulesToText(rules: PermissionRule[]): string {
   return rules.map((rule) => `${rule.effect}: ${rule.tool}`).join("\n")
@@ -145,40 +98,19 @@ function isToolVisible(name: string, risk: ToolRisk, mode: AgentMode): boolean {
   return mode === "plan" ? risk === "ReadOnly" : true
 }
 
-const providers = ref<ProviderInfo[]>([])
 const capabilities = ref<CapabilityInfo[]>([])
-
-const llmEnabled = ref(false)
-const llmProvider = ref("ollama")
-const llmEndpoint = ref("http://localhost:11434")
-const llmModel = ref("qwen2.5")
-const llmApiKey = ref("")
-
 const policyMode = ref<PolicyMode>("Sandbox")
 const selectedAgentMode = ref<AgentMode>("agent")
 const permissionRulesInput = ref("")
+const settingsSection = ref<"appearance" | "execution">("appearance")
 
 const appearanceSaving = ref(false)
 const appearanceMsg = ref("")
-const configSaving = ref(false)
-const configMsg = ref("")
 const executionSaving = ref(false)
 const executionMsg = ref("")
-const testingConnection = ref(false)
-const testSuccess = ref(false)
 const bgUploading = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const backgroundFileLabel = ref("未上传背景")
-
-const currentProvider = computed(() =>
-  providers.value.find((p) => p.id === llmProvider.value) ?? providers.value.find((p) => p.id === "ollama")
-)
-const providerOptions = computed(() =>
-  providers.value.map((provider) => ({
-    label: provider.name,
-    value: provider.id,
-  }))
-)
 
 const parsedRuleError = computed(() => {
   try {
@@ -218,22 +150,8 @@ const executionSummary = computed(() => {
   return "当前是 Danger + Agent，所有工具可见，高风险工具默认要求确认。"
 })
 
-function onProviderChange() {
-  const provider = currentProvider.value
-  if (!provider) return
-  llmEndpoint.value = defaultEndpointFor(provider.id)
-  llmModel.value = provider.defaultModel
-  llmApiKey.value = ""
-}
-
-function selectProvider(value: string | number) {
-  llmProvider.value = String(value)
-  onProviderChange()
-}
-
 async function loadSettings() {
   const cfg = await invoke<AppConfig>("get_config")
-  providers.value = await invoke<ProviderInfo[]>("get_llm_providers")
   capabilities.value = await invoke<CapabilityInfo[]>("get_capabilities")
 
   policyMode.value = cfg.policy_mode
@@ -244,21 +162,6 @@ async function loadSettings() {
     const bgPath = await invoke<string | null>("get_background_path").catch(() => null)
     if (bgPath) {
       backgroundFileLabel.value = decodeURIComponent(bgPath.split(/[\\/]/).pop() || "已应用背景")
-    }
-  }
-
-  if (cfg.llm_provider) {
-    llmEnabled.value = true
-    llmProvider.value = cfg.llm_provider.provider_type
-    llmEndpoint.value = cfg.llm_provider.endpoint
-    llmModel.value = cfg.llm_provider.model
-    llmApiKey.value = cfg.llm_provider.api_key || ""
-  } else {
-    const ollama = providers.value.find((provider) => provider.id === "ollama")
-    if (ollama) {
-      llmProvider.value = ollama.id
-      llmEndpoint.value = defaultEndpointFor(ollama.id)
-      llmModel.value = ollama.defaultModel
     }
   }
 }
@@ -281,9 +184,8 @@ async function persistAppearanceConfig() {
   await invoke("save_config", {
     config: {
       ...current,
-      theme: preset.value,
       accent: accent.value,
-      background_preset: backgroundPreset.value,
+      background_solid_color: backgroundSolidColor.value,
       background_mode: backgroundMode.value,
       surface_opacity: surfaceOpacity.value,
       background_scale: bgScale.value,
@@ -295,12 +197,12 @@ async function persistAppearanceConfig() {
   })
 }
 
-function applyPreset(key: ThemePreset) {
-  setPreset(key)
-}
-
 function applyAccent(color: string) {
   setAccent(color)
+}
+
+function applySolidBackgroundColor(color: string) {
+  setBackgroundSolidColor(color)
 }
 
 async function toggleBackgroundAutoTheme(enabled: boolean) {
@@ -405,58 +307,6 @@ async function resyncBackgroundTheme() {
   appearanceMsg.value = synced ? `已重新匹配主题色 ${synced}` : "未能从当前图片提取主题色"
 }
 
-async function saveLlmConfig() {
-  configSaving.value = true
-  configMsg.value = ""
-  try {
-    const current = await invoke<AppConfig>("get_config")
-    await invoke("save_config", {
-      config: {
-        ...current,
-        llm_provider: llmEnabled.value
-          ? {
-              provider_type: llmProvider.value,
-              api_format: currentProvider.value?.apiFormat || "openai_chat",
-              endpoint: llmEndpoint.value,
-              model: llmModel.value,
-              api_key: llmApiKey.value || undefined,
-            }
-          : null,
-      },
-    })
-    configMsg.value = "已保存"
-    window.setTimeout(() => {
-      configMsg.value = ""
-    }, 2000)
-  } catch (error) {
-    configMsg.value = `保存失败：${error}`
-  } finally {
-    configSaving.value = false
-  }
-}
-
-async function testWithCurrentForm() {
-  testingConnection.value = true
-  configMsg.value = ""
-  testSuccess.value = false
-
-  try {
-    const result = await invoke<{ success: boolean; message: string }>("test_llm_connection_with_config", {
-      providerType: llmProvider.value,
-      endpoint: llmEndpoint.value,
-      model: llmModel.value,
-      apiKey: llmApiKey.value || null,
-    })
-    testSuccess.value = result.success
-    configMsg.value = result.message
-  } catch (error) {
-    testSuccess.value = false
-    configMsg.value = String(error)
-  } finally {
-    testingConnection.value = false
-  }
-}
-
 async function saveExecutionSettings() {
   executionSaving.value = true
   executionMsg.value = ""
@@ -492,53 +342,45 @@ async function saveExecutionSettings() {
   <div class="settings-view">
     <header class="section-head">
       <div>
-        <h2 class="hero-title">外观、模型与执行</h2>
-        <p class="hero-subtitle">
-          这里专注于主题、模型和执行策略。具体工具暴露与 action 兼容层已经拆到左侧的“原子化能力”页面。
-        </p>
+        <h2 class="hero-title">外观与执行</h2>
+        <p class="hero-subtitle">管理主题背景、执行模式和权限规则。</p>
       </div>
     </header>
 
     <section class="card">
       <div class="card-header">
         <div>
+          <h3 class="card-title">设置分区</h3>
+          <p class="card-subtitle">把高频设置拆成两个区块，减少切换成本。</p>
+        </div>
+      </div>
+
+      <div class="chip-grid settings-section-grid">
+        <button
+          type="button"
+          :class="['choice-card', { active: settingsSection === 'appearance' }]"
+          @click="settingsSection = 'appearance'"
+        >
+          <span class="choice-title">外观</span>
+          <span class="choice-note">主题色、背景和图片参数。</span>
+        </button>
+        <button
+          type="button"
+          :class="['choice-card', { active: settingsSection === 'execution' }]"
+          @click="settingsSection = 'execution'"
+        >
+          <span class="choice-title">执行与权限</span>
+          <span class="choice-note">策略模式、Agent Mode 和规则。</span>
+        </button>
+      </div>
+    </section>
+
+    <section v-if="settingsSection === 'appearance'" class="card">
+      <div class="card-header">
+        <div>
           <h3 class="card-title">外观</h3>
-          <p class="card-subtitle">先确定工作台氛围，再调颜色、透明度和背景源。</p>
+          <p class="card-subtitle">调整主题色、透明度和背景。</p>
         </div>
-      </div>
-
-      <div class="field-group">
-        <label class="field-label">主题预设</label>
-        <div class="preset-grid">
-          <button
-            v-for="[key, val] in presets"
-            :key="key"
-            :class="['preset-btn', { active: preset === key }]"
-            :style="{ '--preset-color': val.accent }"
-            @click="applyPreset(key)"
-          >
-            <span class="preset-swatch" />
-            <span class="preset-label">{{ val.label }}</span>
-          </button>
-        </div>
-      </div>
-
-      <div class="field-group">
-        <label class="field-label">强调色</label>
-        <div class="color-row">
-          <input
-            type="color"
-            :value="accent"
-            class="color-input"
-            @input="applyAccent(($event.target as HTMLInputElement).value)"
-          />
-          <span class="color-value">{{ accent }}</span>
-          <button class="ghost-btn" @click="applyAccent(THEME_PRESETS[preset].accent)">重置</button>
-          <button v-if="backgroundMode === 'image'" class="ghost-btn" @click="resyncBackgroundTheme">取背景主色</button>
-        </div>
-        <p v-if="backgroundMode === 'image'" class="field-note">
-          {{ backgroundAutoTheme ? "当前图片会驱动主题色。" : "当前主题色已改为手动控制。" }}
-        </p>
       </div>
 
       <div class="field-group">
@@ -559,25 +401,35 @@ async function saveExecutionSettings() {
       <div class="field-group">
         <label class="field-label">背景模式</label>
         <div class="mode-row">
-          <button :class="['mode-btn', { active: backgroundMode === 'solid' }]" @click="setBackgroundMode('solid')">纯色</button>
-          <button :class="['mode-btn', { active: backgroundMode === 'image' }]" @click="setBackgroundMode('image')">图片</button>
-          <button v-if="backgroundMode !== 'solid'" class="ghost-btn" @click="clearBackground">清除</button>
+          <button type="button" :class="['mode-btn', { active: backgroundMode === 'solid' }]" @click="setBackgroundMode('solid')">纯色</button>
+          <button type="button" :class="['mode-btn', { active: backgroundMode === 'image' }]" @click="setBackgroundMode('image')">图片</button>
+          <button v-if="backgroundMode !== 'solid'" type="button" class="ghost-btn" @click="clearBackground">清除</button>
         </div>
       </div>
 
       <div v-if="backgroundMode === 'solid'" class="field-group">
-        <label class="field-label">内置壁纸</label>
-        <div class="wallpaper-grid">
-          <button
-            v-for="[key, val] in backgrounds"
-            :key="key"
-            :class="['wallpaper-btn', { active: backgroundPreset === key }]"
-            @click="setBackgroundPreset(key)"
-          >
-            <span class="wallpaper-preview" :style="{ background: val.css }" />
-            <span class="wallpaper-label">{{ val.label }}</span>
-          </button>
+        <label class="field-label">背景主色</label>
+        <ColorPickerField
+          :model-value="backgroundSolidColor"
+          placeholder="#111827"
+          @update:model-value="applySolidBackgroundColor"
+        />
+        <p class="field-note">纯色模式只保留背景底色和主题色，不再使用内置壁纸预设。</p>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">{{ backgroundMode === 'solid' ? "主题色" : "图片主题色" }}</label>
+        <div class="color-editor">
+          <ColorPickerField
+            :model-value="accent"
+            placeholder="#3b82f6"
+            @update:model-value="applyAccent"
+          />
+          <button v-if="backgroundMode === 'image'" type="button" class="ghost-btn" @click="resyncBackgroundTheme">取背景主色</button>
         </div>
+        <p v-if="backgroundMode === 'image'" class="field-note">
+          {{ backgroundAutoTheme ? "当前图片会驱动主题色，但你仍然可以手动覆盖。" : "当前主题色已改为手动控制。" }}
+        </p>
       </div>
 
       <div v-if="backgroundMode !== 'solid'" class="field-group">
@@ -591,7 +443,7 @@ async function saveExecutionSettings() {
           @change="handleBgFileUpload"
         />
         <div class="file-row">
-          <button class="ghost-btn file-btn" :disabled="bgUploading" @click="chooseBackgroundFile">
+          <button type="button" class="ghost-btn file-btn" :disabled="bgUploading" @click="chooseBackgroundFile">
             {{ bgUploading ? "上传中..." : "选择图片" }}
           </button>
           <span class="file-name">{{ backgroundFileLabel }}</span>
@@ -621,7 +473,7 @@ async function saveExecutionSettings() {
           <div class="slider-row">
             <input
               type="range"
-              min="100"
+              min="50"
               max="200"
               :value="Math.round(bgScale * 100)"
               class="opacity-slider"
@@ -663,7 +515,7 @@ async function saveExecutionSettings() {
       </template>
 
       <div class="card-actions">
-        <button class="save-btn" :disabled="appearanceSaving" @click="saveAppearance">
+        <button type="button" class="save-btn" :disabled="appearanceSaving" @click="saveAppearance">
           {{ appearanceSaving ? "保存中..." : "保存外观" }}
         </button>
         <span v-if="appearanceMsg" class="msg" :class="{ error: appearanceMsg.startsWith('保存失败') }">
@@ -672,73 +524,11 @@ async function saveExecutionSettings() {
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-header">
-        <div>
-          <h3 class="card-title">模型</h3>
-          <p class="card-subtitle">连接本地或云端模型。测试连接直接使用当前表单值，不需要先保存。</p>
-        </div>
-        <label class="toggle-switch">
-          <input v-model="llmEnabled" type="checkbox" />
-          <span class="toggle-track" />
-        </label>
-      </div>
-
-      <div v-if="llmEnabled" class="model-fields">
-        <div class="field-group">
-          <label class="field-label">Provider</label>
-          <div class="provider-row">
-            <ThemeSelect
-              class="form-input provider-select"
-              :model-value="llmProvider"
-              :options="providerOptions"
-              @update:model-value="selectProvider"
-            />
-            <span v-if="currentProvider?.iconColor" class="provider-dot" :style="{ background: currentProvider.iconColor }" />
-            <span v-if="currentProvider" class="provider-id">{{ currentProvider.id }}</span>
-            <a v-if="currentProvider?.websiteUrl" :href="currentProvider.websiteUrl" target="_blank" class="provider-link">官网</a>
-          </div>
-        </div>
-
-        <div class="field-group">
-          <label class="field-label">Endpoint</label>
-          <input
-            v-model="llmEndpoint"
-            class="form-input"
-            type="text"
-            :placeholder="currentProvider ? defaultEndpointFor(currentProvider.id) : ''"
-          />
-        </div>
-
-        <div class="field-group">
-          <label class="field-label">Model</label>
-          <input v-model="llmModel" class="form-input" type="text" :placeholder="currentProvider?.defaultModel || ''" />
-        </div>
-
-        <div v-if="currentProvider && needsKeyFor(currentProvider.id)" class="field-group">
-          <label class="field-label">API Key</label>
-          <input v-model="llmApiKey" class="form-input" type="password" placeholder="sk-..." />
-        </div>
-
-        <div class="card-actions">
-          <button class="save-btn" :disabled="configSaving" @click="saveLlmConfig">
-            {{ configSaving ? "保存中..." : "保存" }}
-          </button>
-          <button class="ghost-btn" :disabled="testingConnection" @click="testWithCurrentForm">
-            {{ testingConnection ? "测试中..." : "测试连接" }}
-          </button>
-          <span v-if="configMsg" class="msg" :class="{ error: !testSuccess && configMsg !== '已保存' }">
-            {{ configMsg }}
-          </span>
-        </div>
-      </div>
-    </section>
-
-    <section class="card">
+    <section v-if="settingsSection === 'execution'" class="card">
       <div class="card-header">
         <div>
           <h3 class="card-title">执行与权限</h3>
-          <p class="card-subtitle">把策略层、代理模式和 allow/deny 规则拆开解释，避免用户不知道工具为什么能跑或不能跑。</p>
+          <p class="card-subtitle">控制工具暴露范围、执行策略和权限规则。</p>
         </div>
       </div>
 
@@ -754,6 +544,7 @@ async function saveExecutionSettings() {
             v-for="option in policyModeOptions"
             :key="option.value"
             :class="['choice-card', { active: policyMode === option.value }]"
+            type="button"
             @click="policyMode = option.value"
           >
             <span class="choice-title">{{ option.label }}</span>
@@ -769,6 +560,7 @@ async function saveExecutionSettings() {
             v-for="option in agentModeOptions"
             :key="option.value"
             :class="['choice-card', { active: selectedAgentMode === option.value }]"
+            type="button"
             @click="selectedAgentMode = option.value"
           >
             <span class="choice-title">{{ option.label }}</span>
@@ -813,7 +605,7 @@ async function saveExecutionSettings() {
       </div>
 
       <div class="card-actions">
-        <button class="save-btn" :disabled="executionSaving || !!parsedRuleError" @click="saveExecutionSettings">
+        <button type="button" class="save-btn" :disabled="executionSaving || !!parsedRuleError" @click="saveExecutionSettings">
           {{ executionSaving ? "保存中..." : "保存执行设置" }}
         </button>
         <span v-if="executionMsg" class="msg" :class="{ error: executionMsg.startsWith('保存失败') }">
@@ -821,6 +613,7 @@ async function saveExecutionSettings() {
         </span>
       </div>
     </section>
+
   </div>
 </template>
 
@@ -831,10 +624,10 @@ async function saveExecutionSettings() {
   overflow-y: auto;
   padding: 28px 32px 40px;
   max-width: 980px;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 18px;
-  scrollbar-gutter: stable;
 }
 
 .section-head {
@@ -1019,7 +812,6 @@ async function saveExecutionSettings() {
 .choice-card:hover,
 .tool-card:hover,
 .wallpaper-btn:hover,
-.preset-btn:hover,
 .ghost-btn:hover:not(:disabled),
 .mode-btn:hover {
   border-color: rgba(var(--accent-rgb), 0.22);
@@ -1028,7 +820,6 @@ async function saveExecutionSettings() {
 
 .choice-card.active,
 .wallpaper-btn.active,
-.preset-btn.active,
 .mode-btn.active {
   border-color: rgba(var(--accent-rgb), 0.28);
   background: rgba(var(--accent-rgb), 0.08);
@@ -1134,13 +925,6 @@ async function saveExecutionSettings() {
   font-family: var(--font-mono);
 }
 
-.preset-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.preset-btn,
 .mode-btn,
 .ghost-btn,
 .file-btn,
@@ -1149,30 +933,7 @@ async function saveExecutionSettings() {
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, transform 0.15s ease;
 }
 
-.preset-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  border: 1px solid var(--border-color);
-  border-radius: 14px;
-  background: var(--surface-1);
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.preset-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--preset-color);
-}
-
-.preset-label {
-  font-size: 13px;
-}
-
-.color-row,
+.color-editor,
 .slider-row,
 .mode-row,
 .file-row,
@@ -1182,6 +943,102 @@ async function saveExecutionSettings() {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.model-summary,
+.model-profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.model-profile-list {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.model-profile-card {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.model-profile-card:hover,
+.model-profile-card.active {
+  border-color: rgba(var(--accent-rgb), 0.22);
+  background: rgba(var(--accent-rgb), 0.08);
+  transform: translateY(-1px);
+}
+
+.model-profile-main {
+  min-width: 0;
+}
+
+.model-profile-name {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.model-profile-meta {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.model-profile-badge,
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.status-chip.active,
+.model-profile-badge {
+  border-color: rgba(var(--accent-rgb), 0.22);
+  background: rgba(var(--accent-rgb), 0.1);
+  color: var(--text-primary);
+}
+
+.status-chip.subtle {
+  color: var(--text-tertiary);
+}
+
+.color-editor {
+  align-items: stretch;
+}
+
+.color-pad {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 44px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .color-input {
@@ -1194,6 +1051,14 @@ async function saveExecutionSettings() {
   cursor: pointer;
 }
 
+.color-input-large {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+
 .color-input::-webkit-color-swatch-wrapper {
   padding: 0;
 }
@@ -1201,6 +1066,12 @@ async function saveExecutionSettings() {
 .color-input::-webkit-color-swatch {
   border: none;
   border-radius: 6px;
+}
+
+.color-text-input {
+  flex: 1;
+  min-width: 160px;
+  font-family: var(--font-mono);
 }
 
 .color-value,
@@ -1367,17 +1238,15 @@ async function saveExecutionSettings() {
 .form-input,
 .rules-input {
   width: 100%;
-  padding: 10px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.022);
+  padding: 12px 14px;
+  border: 1px solid rgba(var(--border-rgb), 0.9);
+  border-radius: 16px;
+  background: rgba(var(--surface-rgb), 0.78);
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
-  appearance: none;
-  color-scheme: dark;
+  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
 }
 
 .rules-input {
@@ -1389,9 +1258,8 @@ async function saveExecutionSettings() {
 
 .form-input:focus,
 .rules-input:focus {
-  border-color: rgba(var(--accent-rgb), 0.22);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
-  background: var(--surface-2);
+  border-color: rgba(var(--accent-rgb), 0.46);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.16);
 }
 
 .form-input::placeholder,

@@ -25,6 +25,18 @@ export interface ExecutionInfo {
   output?: string
   error?: string
   duration?: string
+  delegated?: DelegatedExecution | null
+}
+
+export interface DelegatedExecution {
+  agentId: string
+  agentName: string
+  role?: string
+  task?: string
+  content?: string
+  reasoningContent?: string | null
+  executionCount?: number
+  executions: ExecutionInfo[]
 }
 
 export interface MemoryCandidate {
@@ -82,6 +94,9 @@ interface RuntimeTurn {
   id: string
   threadId: string
   sessionId: string
+  parentTurnId?: string | null
+  agentName?: string | null
+  delegated?: boolean
   status: string
   agentMode: AgentMode
   userContent: string
@@ -113,6 +128,7 @@ export interface RuntimeTurnView {
   turn: RuntimeTurn
   events: RuntimeEvent[]
   tools: ExecutionInfo[]
+  delegatedTurns: RuntimeTurnView[]
 }
 
 interface RuntimeToolState extends ExecutionInfo {
@@ -120,6 +136,18 @@ interface RuntimeToolState extends ExecutionInfo {
 }
 
 let _msgId = 0
+const SYSTEM_AGENT_TOOLS = [
+  "thinking",
+  "checklist_write",
+  "capability_list",
+  "capability_register",
+  "action_list",
+  "action_register",
+  "agent_list",
+  "agent_delegate",
+  "agent_register",
+] as const
+
 function nextId() {
   return `msg-${++_msgId}`
 }
@@ -152,6 +180,51 @@ function agentIconFor(agentId?: string | null): string {
   }
 }
 
+function parseDelegatedExecution(raw: unknown): DelegatedExecution | null {
+  if (!raw || typeof raw !== "object") return null
+  const item = raw as Record<string, unknown>
+  const executions = Array.isArray(item.executions)
+    ? item.executions
+      .map((exec) => {
+        if (!exec || typeof exec !== "object") return null
+        const entry = exec as Record<string, unknown>
+        return {
+          action: typeof entry.capability === "string" ? entry.capability : "tool",
+          status: normalizeExecStatus(typeof entry.status === "string" ? entry.status : "failed"),
+          input: typeof entry.input === "string" ? entry.input : undefined,
+          output: typeof entry.output === "string" ? entry.output : undefined,
+          error: typeof entry.error === "string" ? entry.error : undefined,
+          duration: typeof entry.durationMs === "number" ? formatDuration(entry.durationMs) : undefined,
+        } satisfies ExecutionInfo
+      })
+      .filter(Boolean) as ExecutionInfo[]
+    : []
+
+  return {
+    agentId: typeof item.agentId === "string" ? item.agentId : "",
+    agentName: typeof item.agentName === "string" ? item.agentName : "子 Agent",
+    role: typeof item.role === "string" ? item.role : undefined,
+    task: typeof item.task === "string" ? item.task : undefined,
+    content: typeof item.content === "string" ? item.content : undefined,
+    reasoningContent: typeof item.reasoningContent === "string" ? item.reasoningContent : null,
+    executionCount: typeof item.executionCount === "number" ? item.executionCount : executions.length,
+    executions,
+  }
+}
+
+function outgoingAgentProfile(profile: AgentProfile) {
+  return {
+    id: profile.id,
+    name: profile.name,
+    role: profile.role,
+    persona: profile.persona,
+    memoryScope: serializeMemoryScope(profile.memoryScope),
+    tools: [...new Set([...profile.tools, ...SYSTEM_AGENT_TOOLS])],
+    delegatable: profile.delegatable,
+    delegatePriority: profile.delegatePriority,
+  }
+}
+
 function backendMsgToChatMsg(msg: BackendMessage): ChatMsg {
   return {
     id: nextId(),
@@ -160,16 +233,31 @@ function backendMsgToChatMsg(msg: BackendMessage): ChatMsg {
     turnId: msg.turn_id ?? undefined,
     agentName: msg.role === "agent" ? msg.agent_name || "OhMyWu" : undefined,
     agentIcon: msg.role === "agent" ? agentIconFor(msg.agent_id) : undefined,
-    execs: msg.executions?.map((e: BackendExec) => ({
-      action: e.capability,
-      status: normalizeExecStatus(e.status),
-      input: e.input,
-      output: e.output,
-      error: e.error,
-      duration: `${(e.duration_ms / 1000).toFixed(1)}s`,
-    })),
+    execs: msg.executions?.map((e: BackendExec) => {
+      const delegated = e.capability === "agent_delegate"
+        ? parseDelegatedExecution(safeJsonParse(e.output))
+        : null
+      return {
+        action: e.capability,
+        status: normalizeExecStatus(e.status),
+        input: e.input,
+        output: delegated ? undefined : e.output,
+        error: e.error,
+        duration: `${(e.duration_ms / 1000).toFixed(1)}s`,
+        delegated,
+      } satisfies ExecutionInfo
+    }),
     taskId: msg.task_id,
     timestamp: msg.timestamp ? new Date(msg.timestamp).getTime() : Date.now(),
+  }
+}
+
+function safeJsonParse(value: unknown): unknown {
+  if (typeof value !== "string") return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return null
   }
 }
 
@@ -229,6 +317,7 @@ export const useChatStore = defineStore("chat", () => {
   const memorySaving = ref<Record<string, boolean>>({})
   const memoryErrors = ref<Record<string, string | null>>({})
   const memorySaved = ref<Record<string, SavedMemoryNote | null>>({})
+  const memoryCollapsed = ref<Record<string, boolean>>({})
 
   let unlistenStream: UnlistenFn | null = null
   let unlistenRuntime: UnlistenFn | null = null
@@ -268,6 +357,7 @@ export const useChatStore = defineStore("chat", () => {
         turn,
         events: [],
         tools: [],
+        delegatedTurns: [],
       }
     }
 
@@ -300,9 +390,25 @@ export const useChatStore = defineStore("chat", () => {
             action: capability,
             status: "running",
             input: typeof payload.inputPreview === "string" ? payload.inputPreview : undefined,
+            delegated: null,
           }
           toolsById[toolCallId] = tool
           toolsOrdered.push(tool)
+        }
+
+        if (event.kind === "agent.delegate.started") {
+          const toolCallId = typeof payload.toolCallId === "string" ? payload.toolCallId : null
+          const targetAgentId = typeof payload.targetAgentId === "string" ? payload.targetAgentId : ""
+          const targetAgentName = typeof payload.targetAgentName === "string" ? payload.targetAgentName : targetAgentId
+          if (!toolCallId) continue
+          const existing = toolsById[toolCallId]
+          if (!existing) continue
+          existing.delegated = {
+            agentId: targetAgentId,
+            agentName: targetAgentName || "子 Agent",
+            task: typeof payload.task === "string" ? payload.task : undefined,
+            executions: [],
+          }
         }
 
         if (event.kind === "tool.completed") {
@@ -314,21 +420,34 @@ export const useChatStore = defineStore("chat", () => {
           const existing = toolsById[toolCallId]
           const status = normalizeExecStatus(typeof payload.status === "string" ? payload.status : "failed")
           const durationMs = typeof payload.durationMs === "number" ? payload.durationMs : undefined
+          const delegated = parseDelegatedExecution(payload.delegated)
           if (existing) {
             existing.status = status
             existing.input = typeof payload.inputPreview === "string" ? payload.inputPreview : existing.input
-            existing.output = typeof payload.outputPreview === "string" ? payload.outputPreview : existing.output
+            existing.output = delegated
+              ? undefined
+              : typeof payload.outputPreview === "string"
+                ? payload.outputPreview
+                : existing.output
             existing.error = typeof payload.errorPreview === "string" ? payload.errorPreview : existing.error
             existing.duration = durationMs != null ? formatDuration(durationMs) : existing.duration
+            if (delegated) {
+              existing.delegated = delegated
+            }
           } else {
             const tool: RuntimeToolState = {
               toolCallId,
               action: capability,
               status,
               input: typeof payload.inputPreview === "string" ? payload.inputPreview : undefined,
-              output: typeof payload.outputPreview === "string" ? payload.outputPreview : undefined,
+              output: delegated
+                ? undefined
+                : typeof payload.outputPreview === "string"
+                  ? payload.outputPreview
+                  : undefined,
               error: typeof payload.errorPreview === "string" ? payload.errorPreview : undefined,
               duration: durationMs != null ? formatDuration(durationMs) : undefined,
+              delegated,
             }
             toolsById[toolCallId] = tool
             toolsOrdered.push(tool)
@@ -346,6 +465,20 @@ export const useChatStore = defineStore("chat", () => {
       }
     }
 
+    for (const turnId of Object.keys(map)) {
+      const view = map[turnId]
+      const parentTurnId = view.turn.parentTurnId
+      if (parentTurnId && map[parentTurnId]) {
+        map[parentTurnId].delegatedTurns.push(view)
+      }
+    }
+
+    for (const turnId of Object.keys(map)) {
+      map[turnId].delegatedTurns.sort((a, b) =>
+        a.turn.startedAt.localeCompare(b.turn.startedAt)
+      )
+    }
+
     return map
   })
 
@@ -360,6 +493,7 @@ export const useChatStore = defineStore("chat", () => {
     memorySaving.value = {}
     memoryErrors.value = {}
     memorySaved.value = {}
+    memoryCollapsed.value = {}
   }
 
   function upsertRuntimeTurn(turn: RuntimeTurn) {
@@ -389,6 +523,9 @@ export const useChatStore = defineStore("chat", () => {
         id: event.turnId,
         sessionId: event.sessionId,
         threadId: event.threadId || `thread-${event.sessionId}`,
+        parentTurnId: typeof event.payload?.parentTurnId === "string" ? event.payload.parentTurnId : null,
+        agentName: typeof event.payload?.agentName === "string" ? event.payload.agentName : null,
+        delegated: event.payload?.delegated === true,
         status: "running",
         agentMode: (event.payload?.agentMode as AgentMode) || agentMode.value,
         userContent: (event.payload?.userContent as string) || "",
@@ -414,7 +551,16 @@ export const useChatStore = defineStore("chat", () => {
         if (typeof assistantContent === "string") {
           existing.assistantContent = assistantContent
         }
-        if (activeTurnId.value === event.turnId) {
+        if (typeof event.payload?.parentTurnId === "string") {
+          existing.parentTurnId = event.payload.parentTurnId
+        }
+        if (typeof event.payload?.agentName === "string") {
+          existing.agentName = event.payload.agentName
+        }
+        if (event.payload?.delegated === true) {
+          existing.delegated = true
+        }
+        if (activeTurnId.value === event.turnId && !existing.parentTurnId) {
           activeTurnId.value = null
         }
       }
@@ -480,6 +626,7 @@ export const useChatStore = defineStore("chat", () => {
       memorySaving.value = {}
       memoryErrors.value = {}
       memorySaved.value = {}
+      memoryCollapsed.value = {}
       await loadRuntimeThread(id)
     } catch (e) {
       console.error("Load session:", e)
@@ -588,7 +735,11 @@ export const useChatStore = defineStore("chat", () => {
     setSelectedCategory(trimmed)
   }
 
-  async function sendMessage(content: string, agentProfile?: AgentProfile) {
+  async function sendMessage(
+    content: string,
+    agentProfile?: AgentProfile,
+    agentProfiles?: AgentProfile[],
+  ) {
     if (!currentSessionId.value || pending.value) return
 
     // user message
@@ -613,15 +764,8 @@ export const useChatStore = defineStore("chat", () => {
       const response = await invoke<BackendMessage>("send_message", {
         sessionId: currentSessionId.value,
         content,
-        agentProfile: agentProfile
-          ? {
-              id: agentProfile.id,
-              name: agentProfile.name,
-              role: agentProfile.role,
-              persona: agentProfile.persona,
-              memoryScope: serializeMemoryScope(agentProfile.memoryScope),
-            }
-          : null,
+        agentProfile: agentProfile ? outgoingAgentProfile(agentProfile) : null,
+        agentProfiles: (agentProfiles || []).map(outgoingAgentProfile),
       })
       // If we streamed content, use that; otherwise use full response
       if (streamingContent.value) {
@@ -698,15 +842,28 @@ export const useChatStore = defineStore("chat", () => {
   }
 
   function clearMemoryCandidate(turnId: string) {
-    const nextCandidates = { ...memoryCandidates.value }
+    if (memoryCandidates.value[turnId] || memorySaved.value[turnId]) {
+      memoryCollapsed.value = {
+        ...memoryCollapsed.value,
+        [turnId]: true,
+      }
+      return
+    }
+
     const nextErrors = { ...memoryErrors.value }
-    const nextSaved = { ...memorySaved.value }
-    delete nextCandidates[turnId]
+    const nextCollapsed = { ...memoryCollapsed.value }
     delete nextErrors[turnId]
-    delete nextSaved[turnId]
-    memoryCandidates.value = nextCandidates
+    delete nextCollapsed[turnId]
     memoryErrors.value = nextErrors
-    memorySaved.value = nextSaved
+    memoryCollapsed.value = nextCollapsed
+  }
+
+  function reopenMemoryCandidate(turnId: string) {
+    if (!memoryCandidates.value[turnId] && !memorySaved.value[turnId]) return
+    memoryCollapsed.value = {
+      ...memoryCollapsed.value,
+      [turnId]: false,
+    }
   }
 
   async function generateMemoryCandidate(turnId: string) {
@@ -726,6 +883,10 @@ export const useChatStore = defineStore("chat", () => {
       memorySaved.value = {
         ...memorySaved.value,
         [turnId]: null,
+      }
+      memoryCollapsed.value = {
+        ...memoryCollapsed.value,
+        [turnId]: false,
       }
     } catch (e) {
       console.error("Generate memory candidate:", e)
@@ -754,6 +915,10 @@ export const useChatStore = defineStore("chat", () => {
       memorySaved.value = {
         ...memorySaved.value,
         [turnId]: note,
+      }
+      memoryCollapsed.value = {
+        ...memoryCollapsed.value,
+        [turnId]: false,
       }
     } catch (e) {
       console.error("Save memory candidate:", e)
@@ -786,6 +951,7 @@ export const useChatStore = defineStore("chat", () => {
     memorySaving,
     memoryErrors,
     memorySaved,
+    memoryCollapsed,
     latestRuntimeEvent,
     runtimeByTurnId,
     currentSession,
@@ -806,6 +972,7 @@ export const useChatStore = defineStore("chat", () => {
     cancelAgent,
     updateMemoryCandidate,
     clearMemoryCandidate,
+    reopenMemoryCandidate,
     generateMemoryCandidate,
     saveMemoryCandidate,
   }

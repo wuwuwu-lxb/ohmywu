@@ -23,6 +23,10 @@ pub struct RuntimeTurn {
     pub id: String,
     pub thread_id: String,
     pub session_id: String,
+    pub parent_turn_id: Option<String>,
+    pub agent_name: Option<String>,
+    #[serde(default)]
+    pub delegated: bool,
     pub status: String,
     pub agent_mode: AgentMode,
     pub user_content: String,
@@ -100,6 +104,9 @@ impl RuntimeStore {
             id: unique_id("turn"),
             thread_id: thread.id.clone(),
             session_id: session_id.to_string(),
+            parent_turn_id: None,
+            agent_name: None,
+            delegated: false,
             status: "running".into(),
             agent_mode,
             user_content: user_content.to_string(),
@@ -123,6 +130,56 @@ impl RuntimeStore {
             serde_json::json!({
                 "agentMode": turn.agent_mode,
                 "userContent": turn.user_content,
+            }),
+        )?;
+
+        Ok(turn)
+    }
+
+    pub fn start_delegated_turn(
+        &self,
+        session_id: &str,
+        parent_turn_id: &str,
+        turn_id: &str,
+        agent_mode: AgentMode,
+        user_content: &str,
+        agent_name: &str,
+    ) -> Result<RuntimeTurn, String> {
+        let mut thread = self.ensure_thread(session_id)?;
+        let now = chrono_now();
+        let turn = RuntimeTurn {
+            id: turn_id.to_string(),
+            thread_id: thread.id.clone(),
+            session_id: session_id.to_string(),
+            parent_turn_id: Some(parent_turn_id.to_string()),
+            agent_name: Some(agent_name.to_string()),
+            delegated: true,
+            status: "running".into(),
+            agent_mode,
+            user_content: user_content.to_string(),
+            assistant_content: None,
+            execution_count: 0,
+            checklist_count: 0,
+            started_at: now.clone(),
+            finished_at: None,
+        };
+        self.write_turn(&turn)?;
+
+        thread.updated_at = now;
+        thread.last_turn_id = Some(turn.id.clone());
+        self.write_thread(&thread)?;
+
+        let _ = self.record_event(
+            session_id,
+            Some(&turn.id),
+            "turn.started",
+            &format!("子 Agent 开始：{}", agent_name),
+            serde_json::json!({
+                "agentMode": turn.agent_mode,
+                "userContent": turn.user_content,
+                "agentName": agent_name,
+                "parentTurnId": parent_turn_id,
+                "delegated": true,
             }),
         )?;
 

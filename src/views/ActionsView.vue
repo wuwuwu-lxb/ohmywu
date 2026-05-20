@@ -1,19 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue"
 import { invoke } from "@tauri-apps/api/core"
+import ConfirmDialog from "../components/ConfirmDialog.vue"
 
-type ActionSource = "builtin" | "skill"
+type ActionSource = "system" | "user"
 
 interface Action {
   id: string
   title: string
   description: string
   source: ActionSource
+  mode: string
   capabilities: string[]
   tags: string[]
-  path?: string | null
-  entry?: string | null
+  enabled: boolean
+  editable: boolean
+  deletable: boolean
   available: boolean
+  sourceHint?: string | null
+  supportingFiles: string[]
 }
 
 interface ActionBlueprint {
@@ -24,8 +29,7 @@ interface ActionBlueprint {
   mode: string
   capabilities: string[]
   tags: string[]
-  path?: string | null
-  entry?: string | null
+  sourceHint?: string | null
   compiledPrompt: string
   supportingFiles: string[]
 }
@@ -37,12 +41,18 @@ const expandedActionId = ref<string | null>(null)
 const actionBlueprints = ref<Record<string, ActionBlueprint>>({})
 const detailLoading = ref<Record<string, boolean>>({})
 const detailErrors = ref<Record<string, string | null>>({})
+const deleteConfirmId = ref<string | null>(null)
 
-const builtinCount = computed(() => actions.value.filter((action) => action.source === "builtin").length)
-const skillCount = computed(() => actions.value.filter((action) => action.source === "skill").length)
+const systemCount = computed(() => actions.value.filter((action) => action.source === "system").length)
+const userCount = computed(() => actions.value.filter((action) => action.source === "user").length)
+const enabledCount = computed(() => actions.value.filter((action) => action.enabled).length)
+const readyCount = computed(() => actions.value.filter((action) => action.available).length)
+const deleteActionTarget = computed(() =>
+  actions.value.find((action) => action.id === deleteConfirmId.value) || null
+)
 
 function sourceLabel(source: ActionSource) {
-  return source === "skill" ? "skill" : "builtin"
+  return source === "system" ? "system" : "user"
 }
 
 async function loadActions() {
@@ -63,7 +73,7 @@ async function refreshActions() {
   refreshMsg.value = ""
   try {
     actions.value = await invoke<Action[]>("refresh_actions")
-    refreshMsg.value = "已刷新 action 注册表与本地 skill 兼容层。"
+    refreshMsg.value = "已同步 action 注册目录与当前 capability 绑定状态。"
   } catch (error) {
     console.error("refresh actions:", error)
     refreshMsg.value = String(error)
@@ -102,6 +112,39 @@ async function toggleActionDetail(actionId: string) {
   }
 }
 
+async function toggleAction(action: Action) {
+  try {
+    actions.value = await invoke<Action[]>("set_action_enabled", {
+      id: action.id,
+      enabled: !action.enabled,
+    })
+    deleteConfirmId.value = null
+    refreshMsg.value = action.enabled ? `已停用 ${action.title}` : `已启用 ${action.title}`
+  } catch (error) {
+    console.error("toggle action:", error)
+    refreshMsg.value = String(error)
+  }
+}
+
+async function removeAction(action: Action) {
+  try {
+    actions.value = await invoke<Action[]>("delete_action", { id: action.id })
+    deleteConfirmId.value = null
+    if (expandedActionId.value === action.id) {
+      expandedActionId.value = null
+    }
+    refreshMsg.value = `已删除 ${action.title}`
+  } catch (error) {
+    console.error("delete action:", error)
+    refreshMsg.value = String(error)
+  }
+}
+
+function confirmDeleteAction() {
+  if (!deleteActionTarget.value) return
+  removeAction(deleteActionTarget.value)
+}
+
 onMounted(loadActions)
 </script>
 
@@ -109,21 +152,39 @@ onMounted(loadActions)
   <div class="actions-view">
     <header class="section-head">
       <div>
-        <h2 class="view-title">Actions</h2>
+        <h2 class="view-title">Action 注册</h2>
         <p class="view-subtitle">
-          稳定动作入口与 skill 兼容层。这里展示当前桌面 Agent 已注册的内建 action，以及从本地 `SKILL.md` 生态发现到的兼容 skill。
+          管理 action 目录、状态和蓝图定义。
         </p>
       </div>
       <div class="head-actions">
         <div class="count-group">
           <span class="section-count">{{ actions.length }}</span>
-          <span class="sub-count">builtin {{ builtinCount }} · skill {{ skillCount }}</span>
+          <span class="sub-count">system {{ systemCount }} · user {{ userCount }}</span>
         </div>
-        <button class="refresh-btn" :disabled="loading" @click="refreshActions">
-          {{ loading ? "刷新中" : "刷新" }}
+        <button type="button" class="refresh-btn" :disabled="loading" @click="refreshActions">
+          {{ loading ? "同步中" : "同步 action 目录" }}
         </button>
       </div>
     </header>
+
+    <section class="summary-panel">
+      <article class="summary-card">
+        <span class="summary-label">Action 规范</span>
+        <strong class="summary-value">兼容外部 skill</strong>
+        <p class="summary-note">支持把 skill、prompt 和工作流沉淀为可复用 action。</p>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">注册方式</span>
+        <strong class="summary-value">AI 自注册</strong>
+        <p class="summary-note">通过 `action_list` 和 `action_register` 维护注册表。</p>
+      </article>
+      <article class="summary-card">
+        <span class="summary-label">当前状态</span>
+        <strong class="summary-value">{{ enabledCount }} enabled · {{ readyCount }} ready</strong>
+        <p class="summary-note">ready 表示依赖能力已齐备，可直接测试。</p>
+      </article>
+    </section>
 
     <div v-if="refreshMsg" class="refresh-msg">{{ refreshMsg }}</div>
 
@@ -131,17 +192,22 @@ onMounted(loadActions)
       <div v-for="a in actions" :key="a.id" class="action-card">
         <div class="action-main">
           <div class="action-top">
-            <span class="action-id">{{ a.id }}</span>
+            <div>
+              <span class="action-id">{{ a.id }}</span>
+              <div class="action-title">{{ a.title }}</div>
+            </div>
             <div class="pill-row">
               <span class="action-pill" :class="a.source">{{ sourceLabel(a.source) }}</span>
-              <span class="action-pill subtle">{{ a.available ? "ready" : "missing" }}</span>
-              <button class="detail-btn" @click="toggleActionDetail(a.id)">
-                {{ expandedActionId === a.id ? "收起转化结果" : "查看转化结果" }}
-              </button>
+              <span class="action-pill subtle">{{ a.mode }}</span>
+              <span :class="['action-pill', a.available ? 'ready' : 'warn']">
+                {{ a.available ? "ready" : "missing dependency" }}
+              </span>
+              <span :class="['action-pill', a.enabled ? 'ready' : 'muted']">
+                {{ a.enabled ? "enabled" : "disabled" }}
+              </span>
             </div>
           </div>
 
-          <div class="action-title">{{ a.title }}</div>
           <div class="action-desc">{{ a.description }}</div>
 
           <div v-if="a.capabilities.length" class="meta-block">
@@ -162,25 +228,52 @@ onMounted(loadActions)
             </div>
           </div>
 
-          <div v-if="a.path || a.entry" class="meta-block">
-            <span class="meta-label">Compatibility Evidence</span>
-            <div v-if="a.path" class="meta-path">{{ a.path }}</div>
-            <div v-if="a.entry" class="meta-path">{{ a.entry }}</div>
+          <div v-if="a.sourceHint || a.supportingFiles.length" class="meta-block">
+            <span class="meta-label">Source</span>
+            <div v-if="a.sourceHint" class="meta-path">{{ a.sourceHint }}</div>
+            <div v-if="a.supportingFiles.length" class="chip-row">
+              <span v-for="file in a.supportingFiles" :key="file" class="chip subtle">
+                {{ file }}
+              </span>
+            </div>
+          </div>
+
+          <div class="action-actions">
+            <button type="button" class="detail-btn" @click="toggleActionDetail(a.id)">
+              {{ expandedActionId === a.id ? "收起蓝图" : "查看蓝图" }}
+            </button>
+            <button
+              v-if="a.source === 'user'"
+              class="detail-btn"
+              type="button"
+              @click="toggleAction(a)"
+            >
+              {{ a.enabled ? "停用" : "启用" }}
+            </button>
+            <button
+              v-if="a.deletable"
+              class="detail-btn danger"
+              type="button"
+              @click="deleteConfirmId = a.id"
+            >
+              删除
+            </button>
           </div>
 
           <div v-if="expandedActionId === a.id" class="blueprint-panel">
-            <div v-if="detailLoading[a.id]" class="blueprint-empty">正在编译 action blueprint...</div>
+            <div v-if="detailLoading[a.id]" class="blueprint-empty">正在加载 action blueprint...</div>
             <div v-else-if="detailErrors[a.id]" class="blueprint-error">{{ detailErrors[a.id] }}</div>
             <template v-else-if="actionBlueprints[a.id]">
               <div class="blueprint-top">
-                <span class="meta-label">Action Mode</span>
+                <span class="meta-label">Compiled Prompt</span>
                 <span class="chip">{{ actionBlueprints[a.id].mode }}</span>
               </div>
 
-              <div class="meta-block">
-                <span class="meta-label">Compiled Prompt</span>
-                <pre class="blueprint-code">{{ actionBlueprints[a.id].compiledPrompt }}</pre>
+              <div v-if="actionBlueprints[a.id].sourceHint" class="meta-path">
+                {{ actionBlueprints[a.id].sourceHint }}
               </div>
+
+              <pre class="blueprint-code">{{ actionBlueprints[a.id].compiledPrompt }}</pre>
 
               <div v-if="actionBlueprints[a.id].supportingFiles.length" class="meta-block">
                 <span class="meta-label">Supporting Files</span>
@@ -195,22 +288,30 @@ onMounted(loadActions)
                 </div>
               </div>
             </template>
-            <div v-else class="blueprint-empty">当前 action 还没有可展示的 blueprint。</div>
+            <div v-else class="blueprint-empty">当前 action 还没有可展示的蓝图。</div>
           </div>
         </div>
       </div>
     </div>
 
     <div v-if="!actions.length && !loading" class="empty-state">
-      <p>当前还没有可展示的 action 或 skill 兼容项。</p>
+      <p>当前还没有 action。先在对话中让 AI 通过 `action_register` 注册一条新的 action。</p>
     </div>
+
+    <ConfirmDialog
+      :open="!!deleteConfirmId"
+      title="删除 Action"
+      :message="deleteActionTarget ? `确定删除「${deleteActionTarget.title}」吗？删除后将移除这条 Action 配置。` : '删除后将移除这条 Action 配置。'"
+      @cancel="deleteConfirmId = null"
+      @confirm="confirmDeleteAction"
+    />
   </div>
 </template>
 
 <style scoped>
 .actions-view {
   padding: 28px 32px 32px;
-  max-width: 980px;
+  max-width: 1060px;
   height: 100%;
   overflow-y: auto;
 }
@@ -220,14 +321,17 @@ onMounted(loadActions)
 .count-group,
 .action-top,
 .pill-row,
-.chip-row {
+.chip-row,
+.action-actions,
+.blueprint-top {
   display: flex;
   align-items: flex-start;
   gap: 12px;
 }
 
 .section-head,
-.action-top {
+.action-top,
+.blueprint-top {
   justify-content: space-between;
 }
 
@@ -243,7 +347,7 @@ onMounted(loadActions)
 }
 
 .view-subtitle {
-  max-width: 640px;
+  max-width: 720px;
   font-size: 13px;
   line-height: 1.6;
   color: var(--text-secondary);
@@ -260,10 +364,9 @@ onMounted(loadActions)
 }
 
 .section-count,
-.action-pill,
 .refresh-btn,
-.chip,
-.detail-btn {
+.action-pill,
+.chip {
   border-radius: 999px;
   border: 1px solid var(--border-color);
   background: var(--surface-1);
@@ -290,15 +393,45 @@ onMounted(loadActions)
   cursor: pointer;
 }
 
-.detail-btn {
-  padding: 5px 10px;
-  font-size: 11px;
-  cursor: pointer;
+.summary-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
 }
 
-.refresh-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
+.summary-card,
+.action-card {
+  padding: 18px;
+  border-radius: 20px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-1);
+  box-shadow: var(--shadow-surface);
+}
+
+.summary-label,
+.meta-label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.summary-value {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+
+.summary-note,
+.action-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
 }
 
 .refresh-msg {
@@ -318,31 +451,15 @@ onMounted(loadActions)
 }
 
 .action-card {
-  padding: 18px 18px 16px;
-  background: var(--surface-1);
-  border: 1px solid var(--border-color);
-  border-radius: 18px;
-  box-shadow: var(--shadow-surface);
-  transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
-}
-
-.action-card:hover {
-  border-color: rgba(var(--accent-rgb), 0.18);
-  background: rgba(var(--accent-rgb), 0.05);
-  transform: translateY(-1px);
-}
-
-.action-main {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  background: rgba(var(--accent-rgb), 0.03);
 }
 
 .action-id {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
 }
 
 .action-title {
@@ -352,91 +469,89 @@ onMounted(loadActions)
 }
 
 .action-desc {
-  font-size: 13px;
-  line-height: 1.65;
-  color: var(--text-primary);
+  margin: 12px 0 0;
 }
 
-.action-pill {
-  padding: 5px 10px;
-  font-size: 11px;
-  text-transform: uppercase;
-}
-
-.action-pill.builtin {
-  background: rgba(var(--accent-rgb), 0.12);
-  border-color: rgba(var(--accent-rgb), 0.18);
-  color: var(--text-primary);
-}
-
-.action-pill.skill {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.action-pill.subtle,
-.chip.subtle {
-  opacity: 0.8;
-}
-
-.meta-block {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.meta-label {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-tertiary);
-}
-
-.chip-row {
+.pill-row,
+.chip-row,
+.action-actions {
   flex-wrap: wrap;
 }
 
+.action-pill,
 .chip {
   padding: 5px 10px;
   font-size: 11px;
 }
 
+.action-pill.system {
+  color: var(--accent);
+  border-color: rgba(var(--accent-rgb), 0.24);
+}
+
+.action-pill.user {
+  color: #cbe6ff;
+  border-color: rgba(140, 190, 255, 0.22);
+}
+
+.action-pill.ready {
+  color: #c8facc;
+  border-color: rgba(115, 220, 145, 0.18);
+  background: rgba(115, 220, 145, 0.08);
+}
+
+.action-pill.warn {
+  color: #ffd6a0;
+  border-color: rgba(255, 176, 90, 0.18);
+  background: rgba(255, 176, 90, 0.08);
+}
+
+.action-pill.muted {
+  opacity: 0.72;
+}
+
+.meta-block {
+  margin-top: 14px;
+}
+
 .meta-path {
+  margin-top: 8px;
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--text-secondary);
+  word-break: break-word;
   font-family: var(--font-mono);
-  word-break: break-all;
+}
+
+.action-actions {
+  margin-top: 16px;
+}
+
+.detail-btn {
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.detail-btn.danger {
+  color: #ffb0b0;
+  border-color: rgba(255, 120, 120, 0.18);
+}
+
+.detail-btn.danger.solid {
+  background: rgba(255, 120, 120, 0.1);
 }
 
 .blueprint-panel {
-  margin-top: 2px;
-  padding: 14px;
-  border-radius: 16px;
-  border: 1px solid rgba(var(--accent-rgb), 0.14);
-  background: rgba(var(--accent-rgb), 0.05);
-}
-
-.blueprint-top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
-}
-
-.blueprint-code {
-  margin: 0;
-  padding: 12px 14px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  font-size: 12px;
-  line-height: 1.65;
-  font-family: var(--font-mono);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 360px;
-  overflow: auto;
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.04);
 }
 
 .blueprint-empty,
@@ -446,18 +561,30 @@ onMounted(loadActions)
 }
 
 .blueprint-error {
-  color: #fecaca;
+  color: #ffb6b6;
+}
+
+.blueprint-code {
+  margin: 12px 0 0;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
 }
 
 .empty-state {
-  margin-top: 14px;
-  padding: 34px;
-  text-align: center;
-  border: 1px dashed var(--border-color);
+  margin-top: 18px;
+  padding: 22px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.018);
-  color: var(--text-tertiary);
-  font-size: 14px;
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  text-align: center;
 }
 
 @media (max-width: 800px) {
@@ -467,7 +594,8 @@ onMounted(loadActions)
 
   .section-head,
   .head-actions,
-  .action-top {
+  .action-top,
+  .blueprint-top {
     flex-direction: column;
   }
 

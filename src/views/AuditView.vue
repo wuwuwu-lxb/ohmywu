@@ -28,7 +28,7 @@ onMounted(async () => {
     <header class="section-head">
       <div>
         <h2 class="view-title">审计日志</h2>
-        <p class="view-subtitle">所有关键读写和执行行为都会落到这里，便于回看系统做过什么。</p>
+        <p class="view-subtitle">查看关键操作、执行结果和时间线。</p>
       </div>
       <span class="section-count">{{ events.length }}</span>
     </header>

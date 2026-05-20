@@ -628,10 +628,21 @@ fn build_snippet(body: &str, query_lower: &str, max_chars: usize) -> String {
     let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
     let collapsed_lower = collapsed.to_lowercase();
     if let Some(index) = collapsed_lower.find(query_lower) {
-        let start = index.saturating_sub(max_chars / 3);
-        let end = (index + query_lower.len() + (max_chars * 2 / 3)).min(collapsed.len());
-        let prefix = if start > 0 { "…" } else { "" };
-        let suffix = if end < collapsed.len() { "…" } else { "" };
+        let char_positions = collapsed
+            .char_indices()
+            .map(|(byte_index, _)| byte_index)
+            .chain(std::iter::once(collapsed.len()))
+            .collect::<Vec<_>>();
+        let match_char_index = char_positions
+            .partition_point(|byte_index| *byte_index < index);
+        let query_char_len = query_lower.chars().count().max(1);
+        let total_chars = char_positions.len().saturating_sub(1);
+        let start_char = match_char_index.saturating_sub(max_chars / 3);
+        let end_char = (match_char_index + query_char_len + (max_chars * 2 / 3)).min(total_chars);
+        let start = char_positions[start_char];
+        let end = char_positions[end_char];
+        let prefix = if start_char > 0 { "…" } else { "" };
+        let suffix = if end_char < total_chars { "…" } else { "" };
         return format!("{}{}{}", prefix, &collapsed[start..end], suffix);
     }
 
@@ -846,5 +857,13 @@ With multiple lines.
         let profile_hits = engine.recall("知识库", &["profile".into()], 5).unwrap();
         assert_eq!(profile_hits.len(), 1);
         assert_eq!(profile_hits[0].folder, "profile");
+    }
+
+    #[test]
+    fn test_build_snippet_is_utf8_safe() {
+        let body = "这是一个中文段落，里面有数字 12345 和更多内容，用来验证搜索截断不会崩溃。";
+        let snippet = build_snippet(body, "1", 18);
+        assert!(snippet.contains('1'));
+        assert!(!snippet.is_empty());
     }
 }

@@ -1,5 +1,9 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from "vue"
+import { invoke } from "@tauri-apps/api/core"
+import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
+import type { CapabilityInfo } from "../lib/tools"
 import {
   MEMORY_SCOPE_FOLDERS,
   MEMORY_SCOPE_FOLDER_LABELS,
@@ -12,17 +16,36 @@ import {
 } from "../stores/agents"
 
 const store = useAgentStore()
+const capabilities = ref<CapabilityInfo[]>([])
+const capabilityMsg = ref("")
+const deleteAgentId = ref<string | null>(null)
 const recallLimitOptions = [1, 2, 3, 4, 5, 6, 7, 8]
 const recallLimitSelectOptions = recallLimitOptions.map((limit) => ({
   label: `${limit} 条`,
   value: limit,
 }))
+const delegatePriorityOptions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map((value) => ({
+  label: `${value}`,
+  value,
+}))
+const deleteAgentTarget = computed(() =>
+  store.agents.find((agent) => agent.id === deleteAgentId.value) || null
+)
+
+const toolCapabilities = computed(() =>
+  capabilities.value.filter((capability) => capability.enabled && capability.executable)
+)
 
 function defaultScopeLabel(mode: MemoryScopeMode, folders: readonly MemoryScopeFolder[]) {
   return defaultMemoryScopeLabel(mode, folders)
 }
 
-function syncScopeLabel(agent: AgentProfile, previousLabel: string, previousMode: MemoryScopeMode, previousFolders: readonly MemoryScopeFolder[]) {
+function syncScopeLabel(
+  agent: AgentProfile,
+  previousLabel: string,
+  previousMode: MemoryScopeMode,
+  previousFolders: readonly MemoryScopeFolder[]
+) {
   const previousDefault = defaultScopeLabel(previousMode, previousFolders)
   const nextDefault = defaultScopeLabel(agent.memoryScope.mode, agent.memoryScope.folders)
   if (!agent.memoryScope.label.trim() || previousLabel === previousDefault) {
@@ -67,9 +90,62 @@ function toggleFolder(agent: AgentProfile, folder: MemoryScopeFolder) {
   syncScopeLabel(agent, previousLabel, previousMode, previousFolders)
 }
 
-function toolText(agent: AgentProfile) {
-  return agent.tools.join(" · ")
+function toggleTool(agent: AgentProfile, name: string) {
+  const next = new Set(agent.tools)
+  if (next.has(name)) {
+    next.delete(name)
+  } else {
+    next.add(name)
+  }
+  agent.tools = toolCapabilities.value
+    .map((capability) => capability.name)
+    .filter((capability) => next.has(capability))
 }
+
+function toolTitle(name: string) {
+  return capabilities.value.find((capability) => capability.name === name)?.title || name
+}
+
+function tagText(agent: AgentProfile) {
+  return agent.delegateTags.join(", ")
+}
+
+function updateDelegateTags(agent: AgentProfile, value: string) {
+  agent.delegateTags = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+async function loadCapabilities() {
+  capabilityMsg.value = ""
+  try {
+    capabilities.value = await invoke<CapabilityInfo[]>("get_capabilities")
+  } catch (error) {
+    console.error("load capabilities:", error)
+    capabilityMsg.value = String(error)
+  }
+}
+
+async function refreshAll() {
+  await Promise.all([store.refresh(), loadCapabilities()])
+}
+
+function savingLabel(agent: AgentProfile) {
+  const key = agent.persistedId || agent.id
+  return store.saving[key] ? "保存中" : "自动保存"
+}
+
+async function confirmDeleteAgent() {
+  if (!deleteAgentId.value) return
+  const id = deleteAgentId.value
+  deleteAgentId.value = null
+  await store.removeAgent(id)
+}
+
+onMounted(async () => {
+  await Promise.all([store.init(), loadCapabilities()])
+})
 </script>
 
 <template>
@@ -78,65 +154,59 @@ function toolText(agent: AgentProfile) {
       <div>
         <h2 class="page-title">Agent 管理</h2>
         <p class="page-subtitle">
-          当前重点是把 Agent 的人格、记忆策略和知识范围定义清楚。这里不再绑定固定分类，你可以直接扩展出自己的 Agent 和 Scope。
+          管理 Agent 的角色、记忆范围和能力边界。
         </p>
       </div>
       <div class="head-actions">
-        <div class="head-pill">Prototype</div>
-        <button class="primary-btn" @click="store.addAgent">新增 Agent</button>
+        <button type="button" class="small-btn" :disabled="store.loading" @click="refreshAll">
+          {{ store.loading ? "同步中" : "刷新目录" }}
+        </button>
+        <button type="button" class="primary-btn" @click="store.addAgent">新增 Agent</button>
       </div>
     </header>
 
     <section class="overview-grid">
       <article class="overview-card">
-        <span class="overview-label">当前策略</span>
-        <strong class="overview-value">主 Agent + 可扩展副 Agent</strong>
-        <p class="overview-note">不锁死在“编码 / 学习”这样的预设分类，先把配置层做成可生长的结构。</p>
+        <span class="overview-label">当前目录</span>
+        <strong class="overview-value">{{ store.agents.length }} 个 Agent</strong>
+        <p class="overview-note">支持主 Agent、专用 Agent 和长期角色配置。</p>
       </article>
       <article class="overview-card">
-        <span class="overview-label">记忆模型</span>
-        <strong class="overview-value">结构化 Scope</strong>
-        <p class="overview-note">支持禁用、全量、定向召回，并可配置标签、目录组合、召回上限和策略说明。</p>
+        <span class="overview-label">注册路径</span>
+        <strong class="overview-value">前端直改 + AI 自注册</strong>
+        <p class="overview-note">支持界面编辑，也支持模型注册和更新。</p>
       </article>
       <article class="overview-card">
-        <span class="overview-label">后续延展</span>
-        <strong class="overview-value">多 Agent / 子调用 / 更细粒度记忆</strong>
-        <p class="overview-note">当前这套配置会继续承接真实调度、权限白名单和后续知识库增强。</p>
+        <span class="overview-label">工具治理</span>
+        <strong class="overview-value">{{ toolCapabilities.length }} 个可绑定能力</strong>
+        <p class="overview-note">按 Agent 控制能力暴露，减少无关工具进入上下文。</p>
       </article>
     </section>
 
-    <section class="flow-card">
-      <div>
-        <h3 class="flow-title">协作草图</h3>
-        <p class="flow-note">默认预设只是起点。后续你可以继续拆出“产品研究”、“长期偏好”、“复盘归档”等专门 Agent，而不是被固定角色限制。</p>
-      </div>
-      <div class="flow-row">
-        <span class="flow-node primary">主 Agent</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-node">自定义记忆 Agent</span>
-        <span class="flow-arrow">→</span>
-        <span class="flow-node">自定义执行 Agent</span>
-      </div>
-    </section>
+    <div v-if="store.syncError || capabilityMsg" class="sync-msg">
+      {{ store.syncError || capabilityMsg }}
+    </div>
 
     <section class="agent-list">
-      <article v-for="agent in store.agents" :key="agent.id" class="agent-card">
+      <article v-for="agent in store.agents" :key="agent.persistedId || agent.id" class="agent-card">
         <div class="agent-top">
           <div class="agent-head-main">
             <div class="agent-name-row">
               <h3 class="agent-name">{{ agent.name }}</h3>
               <span v-if="agent.primary" class="agent-badge">Primary</span>
               <span v-if="agent.id === store.activeAgentId" class="agent-badge active">Active</span>
+              <span class="agent-badge subtle">{{ savingLabel(agent) }}</span>
             </div>
             <p class="agent-role-preview">{{ agent.role }}</p>
           </div>
           <div class="agent-actions">
-            <button class="small-btn" @click="store.setActiveAgent(agent.id)">切换</button>
-            <button class="small-btn" @click="store.duplicateAgent(agent.id)">复制</button>
+            <button type="button" class="small-btn" @click="store.setActiveAgent(agent.id)">切换</button>
+            <button type="button" class="small-btn" @click="store.duplicateAgent(agent.id)">复制</button>
             <button
               class="small-btn danger"
-              :disabled="agent.primary"
-              @click="store.removeAgent(agent.id)"
+              type="button"
+              :disabled="!agent.deletable"
+              @click="deleteAgentId = agent.id"
             >
               删除
             </button>
@@ -170,6 +240,7 @@ function toolText(agent: AgentProfile) {
                 v-for="mode in ['none', 'focused', 'all']"
                 :key="mode"
                 class="scope-mode-chip"
+                type="button"
                 :class="{ active: agent.memoryScope.mode === mode }"
                 @click="setScopeMode(agent, mode as MemoryScopeMode)"
               >
@@ -181,7 +252,12 @@ function toolText(agent: AgentProfile) {
           <div class="scope-grid">
             <label class="field">
               <span>Scope 名称</span>
-              <input v-model="agent.memoryScope.label" class="field-input" type="text" placeholder="比如：产品研究 / 长期偏好 / 项目上下文" />
+              <input
+                v-model="agent.memoryScope.label"
+                class="field-input"
+                type="text"
+                placeholder="比如：产品研究 / 长期偏好 / 项目上下文"
+              />
             </label>
 
             <label class="field">
@@ -202,6 +278,7 @@ function toolText(agent: AgentProfile) {
                 v-for="folder in MEMORY_SCOPE_FOLDERS"
                 :key="folder"
                 class="folder-chip"
+                type="button"
                 :class="{
                   active: agent.memoryScope.folders.includes(folder),
                   disabled: agent.memoryScope.mode !== 'focused',
@@ -211,15 +288,6 @@ function toolText(agent: AgentProfile) {
                 {{ MEMORY_SCOPE_FOLDER_LABELS[folder] }}
                 <span class="folder-code">{{ folder }}</span>
               </button>
-            </div>
-            <div class="scope-tip">
-              {{
-                agent.memoryScope.mode === "none"
-                  ? "当前 Agent 不注入长期记忆。"
-                  : agent.memoryScope.mode === "all"
-                    ? "当前 Agent 会读取全部知识目录。"
-                    : "定向模式下可自由组合目录，后续还能继续扩展到标签、时间窗等更细粒度规则。"
-              }}
             </div>
           </div>
 
@@ -234,10 +302,102 @@ function toolText(agent: AgentProfile) {
           </label>
         </section>
 
-        <div class="field">
-          <span>工具范围</span>
-          <div class="tool-block">{{ toolText(agent) }}</div>
-        </div>
+        <section class="tool-panel">
+          <div class="tool-head">
+            <div>
+              <div class="scope-title">工具范围</div>
+              <div class="scope-summary">
+                {{ agent.tools.length ? `${agent.tools.length} 个能力` : "未绑定能力，将只剩系统工具" }}
+              </div>
+            </div>
+            <div class="tool-selected">
+              <span v-for="tool in agent.tools" :key="tool" class="tool-chip selected">
+                {{ toolTitle(tool) }}
+              </span>
+            </div>
+          </div>
+
+          <div class="tool-grid">
+            <button
+              v-for="capability in toolCapabilities"
+              :key="capability.name"
+              class="tool-chip"
+              type="button"
+              :class="{ selected: agent.tools.includes(capability.name) }"
+              @click="toggleTool(agent, capability.name)"
+            >
+              <span class="tool-chip-title">{{ capability.title }}</span>
+              <span class="tool-chip-code">{{ capability.name }}</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="tool-panel delegate-panel">
+          <div class="tool-head">
+            <div>
+              <div class="scope-title">委派推荐</div>
+              <div class="scope-summary">
+                {{
+                  agent.delegatable
+                    ? `允许委派 · 优先级 ${agent.delegatePriority}`
+                    : "当前不暴露给 agent_list"
+                }}
+              </div>
+            </div>
+            <div class="tool-selected">
+              <span v-for="tag in agent.delegateTags" :key="tag" class="tool-chip selected">
+                {{ tag }}
+              </span>
+            </div>
+          </div>
+
+          <div class="scope-grid">
+            <label class="field">
+              <span>推荐标签</span>
+              <input
+                class="field-input"
+                :value="tagText(agent)"
+                type="text"
+                placeholder="例如：代码, 修复, 构建, 测试"
+                @input="updateDelegateTags(agent, ($event.target as HTMLInputElement).value)"
+              />
+            </label>
+
+            <label class="field">
+              <span>推荐说明</span>
+              <input
+                v-model="agent.delegateNote"
+                class="field-input"
+                type="text"
+                placeholder="例如：适合前端修复、构建失败排查和代码落地"
+              />
+            </label>
+          </div>
+
+          <div class="scope-grid">
+            <label class="field">
+              <span>允许自动委派</span>
+              <button
+                class="toggle-btn"
+                type="button"
+                :class="{ active: agent.delegatable }"
+                @click="agent.delegatable = !agent.delegatable"
+              >
+                {{ agent.delegatable ? "已允许" : "未允许" }}
+              </button>
+            </label>
+
+            <label class="field">
+              <span>委派优先级</span>
+              <ThemeSelect
+                class="field-input"
+                :model-value="agent.delegatePriority"
+                :options="delegatePriorityOptions"
+                @update:model-value="(value) => agent.delegatePriority = Number(value)"
+              />
+            </label>
+          </div>
+        </section>
 
         <div class="agent-id-row">
           <span class="agent-id">{{ agent.id }}</span>
@@ -245,9 +405,13 @@ function toolText(agent: AgentProfile) {
       </article>
     </section>
 
-    <div class="actions-row">
-      <button class="reset-btn" @click="store.reset">恢复默认原型</button>
-    </div>
+    <ConfirmDialog
+      :open="!!deleteAgentId"
+      title="删除 Agent"
+      :message="deleteAgentTarget ? `确定删除「${deleteAgentTarget.name}」吗？删除后将移除这条 Agent 配置。` : '删除后将移除这条 Agent 配置。'"
+      @cancel="deleteAgentId = null"
+      @confirm="confirmDeleteAgent"
+    />
   </div>
 </template>
 
@@ -270,8 +434,8 @@ function toolText(agent: AgentProfile) {
 .scope-mode-group,
 .two-col,
 .agent-name-row,
-.flow-row,
-.folder-row {
+.folder-row,
+.tool-head {
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -279,13 +443,14 @@ function toolText(agent: AgentProfile) {
 
 .page-head,
 .agent-top,
-.scope-head {
+.scope-head,
+.tool-head {
   justify-content: space-between;
 }
 
 .page-title,
 .agent-name,
-.flow-title {
+.scope-title {
   margin: 0;
   color: var(--text-primary);
 }
@@ -296,20 +461,89 @@ function toolText(agent: AgentProfile) {
 
 .page-subtitle,
 .overview-note,
-.flow-note,
 .agent-role-preview,
-.scope-summary,
-.scope-tip {
+.scope-summary {
   margin: 6px 0 0;
   color: var(--text-secondary);
   line-height: 1.6;
   font-size: 13px;
 }
 
+.head-actions {
+  align-items: center;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.overview-card,
+.agent-card,
+.scope-panel,
+.tool-panel {
+  border: 1px solid rgba(var(--accent-rgb), 0.14);
+  background: rgba(var(--surface-rgb), 0.68);
+  border-radius: 22px;
+}
+
+.overview-card {
+  padding: 18px;
+}
+
+.overview-label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.overview-value {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+  color: var(--text-primary);
+}
+
+.sync-msg {
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 122, 122, 0.22);
+  background: rgba(255, 122, 122, 0.08);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.agent-list {
+  display: grid;
+  gap: 16px;
+}
+
+.agent-card {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.agent-head-main {
+  min-width: 0;
+}
+
+.agent-name-row {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.agent-role-preview {
+  margin-top: 8px;
+}
+
 .head-pill,
 .agent-badge,
-.tool-block,
-.reset-btn,
+.tool-chip,
 .small-btn,
 .primary-btn,
 .scope-mode-chip,
@@ -320,33 +554,40 @@ function toolText(agent: AgentProfile) {
   color: var(--text-primary);
 }
 
-.head-pill,
 .agent-badge {
   padding: 6px 10px;
   font-size: 11px;
   font-family: var(--font-mono);
 }
 
-.agent-badge.active {
-  background: rgba(var(--accent-rgb), 0.16);
+.agent-badge.active,
+.tool-chip.selected,
+.scope-mode-chip.active,
+.folder-chip.active {
+  background: rgba(var(--accent-rgb), 0.18);
+  border-color: rgba(var(--accent-rgb), 0.32);
+}
+
+.agent-badge.subtle {
+  background: rgba(var(--surface-rgb), 0.62);
+  border-color: rgba(var(--border-rgb), 0.8);
 }
 
 .primary-btn,
 .small-btn,
-.reset-btn,
 .scope-mode-chip,
-.folder-chip {
+.folder-chip,
+.tool-chip {
   cursor: pointer;
 }
 
-.primary-btn,
-.reset-btn {
-  padding: 9px 14px;
+.primary-btn {
+  padding: 10px 14px;
   font-size: 12px;
 }
 
 .small-btn {
-  padding: 7px 11px;
+  padding: 8px 11px;
   font-size: 11px;
   font-family: var(--font-mono);
 }
@@ -356,215 +597,143 @@ function toolText(agent: AgentProfile) {
   cursor: default;
 }
 
-.overview-grid {
+.two-col,
+.scope-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 10px;
-}
-
-.overview-card,
-.agent-card,
-.flow-card,
-.scope-panel {
-  border: 1px solid var(--border-color);
-  border-radius: 20px;
-  background: var(--surface-1);
-  box-shadow: var(--shadow-surface);
-}
-
-.overview-card,
-.flow-card {
-  padding: 18px;
-}
-
-.flow-card {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.flow-node,
-.flow-arrow,
-.agent-id,
-.folder-code {
-  font-family: var(--font-mono);
-}
-
-.flow-node {
-  padding: 8px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border-color);
-  background: rgba(var(--accent-rgb), 0.06);
-  color: var(--text-primary);
-  font-size: 12px;
-}
-
-.flow-node.primary {
-  border-color: rgba(var(--accent-rgb), 0.24);
-  background: rgba(var(--accent-rgb), 0.12);
-}
-
-.flow-arrow {
-  color: var(--text-tertiary);
-  font-size: 12px;
-}
-
-.overview-label,
-.field span {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--text-tertiary);
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.overview-value {
-  display: block;
-  color: var(--text-primary);
-  font-size: 18px;
-}
-
-.agent-list {
-  display: grid;
-  gap: 14px;
-}
-
-.agent-card {
-  padding: 20px;
-}
-
-.agent-head-main {
-  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .field {
-  display: block;
-  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.field span {
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 .field-input {
   width: 100%;
-  padding: 10px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--border-color);
-  background: rgba(255, 255, 255, 0.022);
+  border-radius: 16px;
+  border: 1px solid rgba(var(--border-rgb), 0.9);
+  background: rgba(var(--surface-rgb), 0.78);
   color: var(--text-primary);
-  font-size: 13px;
-  font-family: inherit;
+  padding: 12px 14px;
   outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .field-input:focus {
-  border-color: rgba(var(--accent-rgb), 0.22);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
-  background: var(--surface-2);
+  border-color: rgba(var(--accent-rgb), 0.46);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.16);
+}
+
+.toggle-btn {
+  min-height: 44px;
+  border-radius: 16px;
+  border: 1px solid rgba(var(--border-rgb), 0.9);
+  background: rgba(var(--surface-rgb), 0.78);
+  color: var(--text-secondary);
+  padding: 0 14px;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
+}
+
+.toggle-btn.active {
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-rgb), 0.32);
+  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12);
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .multiline {
   resize: vertical;
   min-height: 96px;
-  line-height: 1.6;
 }
 
-.two-col {
-  align-items: stretch;
-}
-
-.two-col > * {
-  flex: 1;
-  min-width: 0;
-}
-
-.scope-panel {
-  margin-top: 16px;
+.scope-panel,
+.tool-panel {
   padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.scope-title {
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text-primary);
-}
-
-.scope-mode-group {
+.folder-row,
+.tool-grid,
+.tool-selected {
+  display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
-}
-
-.scope-mode-chip {
-  padding: 8px 12px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-
-.scope-mode-chip.active,
-.folder-chip.active,
-.primary-btn {
-  background: rgba(var(--accent-rgb), 0.16);
-  border-color: rgba(var(--accent-rgb), 0.28);
-}
-
-.scope-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(180px, 0.6fr);
-  gap: 12px;
-}
-
-.folder-row {
-  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .folder-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 12px;
 }
 
 .folder-chip.disabled {
-  opacity: 0.55;
+  opacity: 0.52;
 }
 
-.folder-code {
+.folder-code,
+.tool-chip-code,
+.agent-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
   color: var(--text-tertiary);
-  font-size: 10px;
 }
 
-.tool-block {
-  border-radius: 16px;
+.tool-grid {
+  gap: 12px;
+}
+
+.tool-chip {
+  min-width: 170px;
+  text-align: left;
   padding: 12px 14px;
-  font-size: 12px;
-  line-height: 1.7;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-.agent-id-row,
-.actions-row {
+.tool-chip-title {
+  font-size: 12px;
+}
+
+.tool-selected {
+  justify-content: flex-end;
+}
+
+.agent-id-row {
   display: flex;
   justify-content: flex-end;
 }
 
-.agent-id {
-  color: var(--text-tertiary);
-  font-size: 11px;
-}
-
-@media (max-width: 880px) {
+@media (max-width: 960px) {
   .agents-view {
-    padding: 20px 18px 28px;
+    padding: 20px 18px 32px;
+  }
+
+  .overview-grid,
+  .two-col,
+  .scope-grid {
+    grid-template-columns: 1fr;
   }
 
   .page-head,
   .agent-top,
-  .two-col,
   .scope-head,
-  .head-actions {
+  .tool-head {
     flex-direction: column;
   }
 
-  .scope-grid {
-    grid-template-columns: 1fr;
+  .tool-selected {
+    justify-content: flex-start;
   }
 }
 </style>

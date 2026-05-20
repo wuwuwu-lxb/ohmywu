@@ -1,13 +1,16 @@
 mod agent;
+mod agent_catalog;
+mod action_catalog;
+mod capabilities;
 mod config;
 mod data_dir;
 mod permission;
 mod runtime;
-mod skills;
 mod tools;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::collections::HashMap;
 use std::sync::RwLock;
 
 use ohmywu_action_registry::ActionRegistry;
@@ -26,13 +29,20 @@ use ohmywu_llm_adapter::{HealthStatus, LlmConfig, ProviderMetadata};
 use ohmywu_wiki::WikiEngine;
 use serde::{Deserialize, Serialize};
 
+use agent_catalog::{AgentCatalog, AgentUpsertInput, AgentView};
+use action_catalog::{ActionBlueprint, ActionCatalog, ActionUpsertInput, ActionView};
+use capabilities::{CapabilityCatalog, CapabilityUpsertInput, CapabilityView};
 use config::AppConfig;
 use runtime::{RuntimeStore, RuntimeThreadView};
 
 #[derive(Clone)]
 pub struct AppState {
     pub capabilities: Arc<CapabilityRegistry>,
+    pub capability_catalog: Arc<RwLock<CapabilityCatalog>>,
     pub actions: Arc<ActionRegistry>,
+    pub action_catalog: Arc<RwLock<ActionCatalog>>,
+    pub agent_catalog: Arc<RwLock<AgentCatalog>>,
+    pub session_agents: Arc<RwLock<HashMap<String, Vec<agent::AgentInvocationProfile>>>>,
     pub policy: Arc<PolicyEngine>,
     pub tasks: Arc<TaskEngine>,
     pub audit: Arc<AuditLog>,
@@ -42,12 +52,26 @@ pub struct AppState {
     pub wiki: Arc<RwLock<WikiEngine>>,
     pub runtime: Arc<RuntimeStore>,
     pub cancel_token: Arc<AtomicBool>,
+    pub app_handle: Arc<RwLock<Option<tauri::AppHandle>>>,
 }
 
 impl AppState {
     pub fn new(data_dir: std::path::PathBuf) -> Self {
         let capabilities = Arc::new(CapabilityRegistry::new());
+        let capability_catalog = Arc::new(RwLock::new(
+            CapabilityCatalog::load(&data_dir)
+                .expect("failed to initialize capability catalog"),
+        ));
         let actions = Arc::new(ActionRegistry::new());
+        let action_catalog = Arc::new(RwLock::new(
+            ActionCatalog::load(&data_dir)
+                .expect("failed to initialize action catalog"),
+        ));
+        let agent_catalog = Arc::new(RwLock::new(
+            AgentCatalog::load(&data_dir)
+                .expect("failed to initialize agent catalog"),
+        ));
+        let session_agents = Arc::new(RwLock::new(HashMap::new()));
         let policy = Arc::new(PolicyEngine::new());
         let tasks = Arc::new(TaskEngine::new());
         let audit = Arc::new(AuditLog::new());
@@ -72,14 +96,28 @@ impl AppState {
             w.init().unwrap_or_else(|e| eprintln!("wiki init: {}", e));
         }
 
-        // register initial capabilities
-        register_capabilities(&capabilities);
-        // register initial actions
-        refresh_action_registry(&actions);
+        {
+            let catalog = capability_catalog.read().unwrap();
+            catalog.sync_registry(&capabilities);
+        }
+        {
+            let capability_names = capability_catalog
+                .read()
+                .unwrap()
+                .active_names()
+                .into_iter()
+                .collect();
+            let catalog = action_catalog.read().unwrap();
+            catalog.sync_registry(&actions, &capability_names);
+        }
 
         Self {
             capabilities,
+            capability_catalog,
             actions,
+            action_catalog,
+            agent_catalog,
+            session_agents,
             policy,
             tasks,
             audit,
@@ -89,151 +127,285 @@ impl AppState {
             wiki,
             runtime,
             cancel_token: Arc::new(AtomicBool::new(false)),
+            app_handle: Arc::new(RwLock::new(None)),
         }
+    }
+
+    pub fn set_session_agents(
+        &self,
+        session_id: &str,
+        profiles: Vec<agent::AgentInvocationProfile>,
+    ) {
+        if let Ok(mut store) = self.session_agents.write() {
+            store.insert(session_id.to_string(), profiles);
+        }
+    }
+
+    pub fn get_session_agents(
+        &self,
+        session_id: &str,
+    ) -> Vec<agent::AgentInvocationProfile> {
+        if let Some(profiles) = self
+            .session_agents
+            .read()
+            .ok()
+            .and_then(|store| store.get(session_id).cloned())
+        {
+            return profiles;
+        }
+        self.agent_catalog
+            .read()
+            .map(|catalog| catalog.list_profiles())
+            .unwrap_or_default()
+    }
+
+    pub fn get_delegatable_session_agents(
+        &self,
+        session_id: &str,
+    ) -> Vec<agent::AgentInvocationProfile> {
+        let mut items = self
+            .get_session_agents(session_id)
+            .into_iter()
+            .filter(|profile| profile.delegatable)
+            .collect::<Vec<_>>();
+        items.sort_by(|a, b| {
+            b.delegate_priority
+                .cmp(&a.delegate_priority)
+                .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                .then_with(|| a.id.to_lowercase().cmp(&b.id.to_lowercase()))
+        });
+        items
+    }
+
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        if let Ok(mut slot) = self.app_handle.write() {
+            *slot = Some(handle);
+        }
+    }
+
+    pub fn get_app_handle(&self) -> Option<tauri::AppHandle> {
+        self.app_handle
+            .read()
+            .ok()
+            .and_then(|slot| slot.clone())
     }
 }
 
-fn register_capabilities(registry: &CapabilityRegistry) {
-    registry.register(Capability::new(
-        "bash",
-        "Execute a shell command. Subject to policy control.",
-        RiskLevel::HighRisk,
-    ));
-    registry.register(Capability::new(
-        "read",
-        "Read file contents from the filesystem.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "write",
-        "Write content to a file, creating parent directories if needed.",
-        RiskLevel::ControlledWrite,
-    ));
-    registry.register(Capability::new(
-        "edit",
-        "Edit a file by finding and replacing exact text. Requires unique match.",
-        RiskLevel::ControlledWrite,
-    ));
-    registry.register(Capability::new(
-        "glob",
-        "Search for files matching a glob pattern.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "grep",
-        "Search file contents for a pattern.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "web_fetch",
-        "Fetch and read content from a URL.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "thinking",
-        "Use for internal reasoning and planning steps. Does not execute anything.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "checklist_write",
-        "Write or replace the current turn checklist for planning and progress tracking.",
-        RiskLevel::ReadOnly,
-    ));
-    // wiki capabilities
-    registry.register(Capability::new(
-        "wiki_read",
-        "Read a wiki note by slug. Returns markdown content with metadata.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "wiki_write",
-        "Create or update a wiki note. Specify slug, title, body, tags, and optional folder.",
-        RiskLevel::ControlledWrite,
-    ));
-    registry.register(Capability::new(
-        "wiki_search",
-        "Search wiki notes by keyword. Returns matching notes with relevance scores.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "wiki_list",
-        "List all wiki notes sorted by last updated.",
-        RiskLevel::ReadOnly,
-    ));
-    registry.register(Capability::new(
-        "wiki_graph",
-        "Get the wiki knowledge graph as nodes and edges for visualization.",
-        RiskLevel::ReadOnly,
-    ));
-}
-
-fn builtin_actions() -> Vec<Action> {
-    vec![
-        Action::builtin(
-            "shell.exec",
-            "终端执行",
-            "稳定的 shell 执行入口，适合命令运行、构建检查和系统探测。",
-            &["bash"],
-            &["builtin", "terminal", "execution"],
-        ),
-        Action::builtin(
-            "fs.read",
-            "文件读取",
-            "稳定的文件读取入口，聚合本地文件浏览、全文检索和文件发现。",
-            &["read", "glob", "grep"],
-            &["builtin", "filesystem", "readonly"],
-        ),
-        Action::builtin(
-            "wiki.memory",
-            "知识记忆",
-            "稳定的知识库入口，聚合 wiki 检索、读取和写入，用于长期记忆与知识沉淀。",
-            &["wiki_search", "wiki_read", "wiki_write", "wiki_list", "wiki_graph"],
-            &["builtin", "memory", "wiki"],
-        ),
-        Action::builtin(
-            "plan.track",
-            "计划跟踪",
-            "稳定的计划与执行跟踪入口，适合记录思考和生成 checklist。",
-            &["thinking", "checklist_write"],
-            &["builtin", "planning", "runtime"],
-        ),
-    ]
-}
-
-fn refresh_action_registry(registry: &ActionRegistry) {
-    let mut items = builtin_actions();
-    items.extend(skills::discover_skill_actions());
-    registry.replace_all(items);
+fn sync_action_registry(state: &AppState) -> Result<(), String> {
+    let capability_names = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .active_names()
+        .into_iter()
+        .collect();
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.sync_registry(&state.actions, &capability_names);
+    Ok(())
 }
 
 // ── Tauri Commands: queries ──────────────────────────────────────
 
 #[tauri::command]
-fn get_capabilities(state: tauri::State<AppState>) -> Vec<Capability> {
-    state.capabilities.list()
+fn get_capabilities(state: tauri::State<AppState>) -> Result<Vec<CapabilityView>, String> {
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views())
 }
 
 #[tauri::command]
-fn get_actions(state: tauri::State<AppState>) -> Vec<Action> {
-    state.actions.list()
+fn upsert_capability(
+    input: CapabilityUpsertInput,
+    state: tauri::State<AppState>,
+) -> Result<Vec<CapabilityView>, String> {
+    let mut catalog = state
+        .capability_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input)?;
+    catalog.sync_registry(&state.capabilities);
+    drop(catalog);
+    sync_action_registry(&state)?;
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views())
 }
 
 #[tauri::command]
-fn refresh_actions(state: tauri::State<AppState>) -> Result<Vec<Action>, String> {
-    refresh_action_registry(&state.actions);
-    Ok(state.actions.list())
+fn set_capability_enabled(
+    name: String,
+    enabled: bool,
+    state: tauri::State<AppState>,
+) -> Result<Vec<CapabilityView>, String> {
+    let mut catalog = state
+        .capability_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.set_enabled(&name, enabled)?;
+    catalog.sync_registry(&state.capabilities);
+    drop(catalog);
+    sync_action_registry(&state)?;
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views())
+}
+
+#[tauri::command]
+fn delete_capability(
+    name: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<CapabilityView>, String> {
+    let mut catalog = state
+        .capability_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.delete(&name)?;
+    catalog.sync_registry(&state.capabilities);
+    drop(catalog);
+    sync_action_registry(&state)?;
+    let catalog = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views())
+}
+
+#[tauri::command]
+fn get_actions(state: tauri::State<AppState>) -> Result<Vec<ActionView>, String> {
+    let capability_names = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .active_names()
+        .into_iter()
+        .collect();
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views(&capability_names))
+}
+
+#[tauri::command]
+fn get_agents(state: tauri::State<AppState>) -> Result<Vec<AgentView>, String> {
+    let catalog = state
+        .agent_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    Ok(catalog.list_views())
+}
+
+#[tauri::command]
+fn upsert_agent(
+    input: AgentUpsertInput,
+    state: tauri::State<AppState>,
+) -> Result<Vec<AgentView>, String> {
+    let known_capabilities = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .all_names()
+        .into_iter()
+        .collect();
+    let mut catalog = state
+        .agent_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input, &known_capabilities)?;
+    Ok(catalog.list_views())
+}
+
+#[tauri::command]
+fn delete_agent(
+    id: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<AgentView>, String> {
+    let mut catalog = state
+        .agent_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.delete(&id)?;
+    Ok(catalog.list_views())
+}
+
+#[tauri::command]
+fn refresh_actions(state: tauri::State<AppState>) -> Result<Vec<ActionView>, String> {
+    sync_action_registry(&state)?;
+    get_actions(state)
+}
+
+#[tauri::command]
+fn upsert_action(
+    input: ActionUpsertInput,
+    state: tauri::State<AppState>,
+) -> Result<Vec<ActionView>, String> {
+    let known_capabilities = state
+        .capability_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?
+        .all_names()
+        .into_iter()
+        .collect();
+    let mut catalog = state
+        .action_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.upsert(input, &known_capabilities)?;
+    drop(catalog);
+    sync_action_registry(&state)?;
+    get_actions(state)
+}
+
+#[tauri::command]
+fn set_action_enabled(
+    id: String,
+    enabled: bool,
+    state: tauri::State<AppState>,
+) -> Result<Vec<ActionView>, String> {
+    let mut catalog = state
+        .action_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.set_enabled(&id, enabled)?;
+    drop(catalog);
+    sync_action_registry(&state)?;
+    get_actions(state)
+}
+
+#[tauri::command]
+fn delete_action(
+    id: String,
+    state: tauri::State<AppState>,
+) -> Result<Vec<ActionView>, String> {
+    let mut catalog = state
+        .action_catalog
+        .write()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.delete(&id)?;
+    drop(catalog);
+    sync_action_registry(&state)?;
+    get_actions(state)
 }
 
 #[tauri::command]
 fn get_action_blueprint(
     action_id: String,
     state: tauri::State<AppState>,
-) -> Result<skills::ActionBlueprint, String> {
-    let action = state
-        .actions
-        .get(&action_id)
-        .ok_or_else(|| format!("action '{}' 未注册", action_id))?;
-    skills::build_action_blueprint(&action)
+) -> Result<ActionBlueprint, String> {
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    catalog.get_blueprint(&action_id)
 }
 
 #[tauri::command]
@@ -365,13 +537,24 @@ async fn send_message(
     session_id: String,
     content: String,
     agent_profile: Option<agent::AgentInvocationProfile>,
+    agent_profiles: Option<Vec<agent::AgentInvocationProfile>>,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
 ) -> Result<SessionMessage, String> {
     // reset cancel token for this new message
     state.cancel_token.store(false, Ordering::SeqCst);
+    state.set_app_handle(app_handle.clone());
 
     let now = chrono_now();
+    let mut known_profiles = agent_profiles.unwrap_or_default();
+    if let Some(profile) = &agent_profile
+        && !known_profiles.iter().any(|item| item.id == profile.id)
+    {
+        known_profiles.push(profile.clone());
+    }
+    if !known_profiles.is_empty() {
+        state.set_session_agents(&session_id, known_profiles);
+    }
     let agent_mode = {
         let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
         cfg_guard.agent_mode
@@ -411,7 +594,7 @@ async fn send_message(
     // load LLM config
     let llm_config = {
         let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
-        cfg_guard.llm_provider.clone()
+        cfg_guard.active_llm_config()
     };
 
     // Phase 2: LLM agent loop (with fallback to Phase 1 mock if no LLM configured)
@@ -424,6 +607,7 @@ async fn send_message(
             agent_profile.as_ref(),
             &llm_config,
             Some(&app_handle),
+            true,
         )
         .await
         .unwrap_or_else(|e| {
@@ -550,8 +734,7 @@ async fn generate_memory_candidate(
     let llm_config = {
         let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
         cfg_guard
-            .llm_provider
-            .clone()
+            .active_llm_config()
             .ok_or_else(|| "当前未配置模型，无法生成记忆候选".to_string())?
     };
 
@@ -664,7 +847,7 @@ async fn test_llm_connection(
 ) -> Result<String, String> {
     let config = {
         let cfg = state.config.read().map_err(|e| format!("Lock: {}", e))?;
-        cfg.llm_provider.clone()
+        cfg.active_llm_config()
     };
 
     let llm_cfg = match config {
@@ -699,14 +882,27 @@ pub struct LlmTestResult {
     pub latency_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LlmModelOption {
+    pub id: String,
+    pub label: String,
+}
+
 #[tauri::command]
 async fn test_llm_connection_with_config(
     provider_type: String,
+    api_format: Option<String>,
     endpoint: String,
     model: String,
     api_key: Option<String>,
 ) -> Result<LlmTestResult, String> {
-    let llm_cfg = LlmConfig::new(&provider_type, &endpoint, &model, api_key);
+    let mut llm_cfg = LlmConfig::new(&provider_type, &endpoint, &model, api_key);
+    if let Some(api_format) = api_format
+        && !api_format.trim().is_empty()
+    {
+        llm_cfg.api_format = api_format;
+    }
     let provider = ohmywu_llm_adapter::create_provider(&llm_cfg)
         .map_err(|e| e.user_friendly().to_string())?;
     match provider.health_check().await {
@@ -728,6 +924,160 @@ async fn test_llm_connection_with_config(
     }
 }
 
+#[tauri::command]
+async fn fetch_llm_models(
+    provider_type: String,
+    api_format: Option<String>,
+    endpoint: String,
+    api_key: Option<String>,
+) -> Result<Vec<LlmModelOption>, String> {
+    let mut llm_cfg = LlmConfig::new(&provider_type, &endpoint, "", api_key.clone());
+    if let Some(api_format) = api_format
+        && !api_format.trim().is_empty()
+    {
+        llm_cfg.api_format = api_format;
+    }
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Create client: {}", e))?;
+
+    let endpoint = endpoint.trim_end_matches('/').to_string();
+    let options = match llm_cfg.effective_api_format() {
+        ohmywu_llm_adapter::provider::ApiFormat::Ollama => {
+            let url = if endpoint.ends_with("/api/tags") {
+                endpoint
+            } else {
+                format!("{}/api/tags", endpoint)
+            };
+            let data = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .error_for_status()
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("解析模型列表失败: {}", e))?;
+            data.get("models")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("name").and_then(|v| v.as_str()))
+                .map(|name| LlmModelOption {
+                    id: name.to_string(),
+                    label: name.to_string(),
+                })
+                .collect::<Vec<_>>()
+        }
+        ohmywu_llm_adapter::provider::ApiFormat::OpenAiChat
+        | ohmywu_llm_adapter::provider::ApiFormat::OpenAiResponses => {
+            let url = if endpoint.ends_with("/v1/chat/completions") {
+                endpoint.replace("/v1/chat/completions", "/v1/models")
+            } else if endpoint.ends_with("/chat/completions") {
+                endpoint.replace("/chat/completions", "/models")
+            } else if endpoint.ends_with("/v1") {
+                format!("{}/models", endpoint)
+            } else {
+                format!("{}/v1/models", endpoint)
+            };
+            let response = client
+                .get(url)
+                .header("Authorization", format!("Bearer {}", api_key.unwrap_or_default()))
+                .send()
+                .await
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .error_for_status()
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("解析模型列表失败: {}", e))?;
+            response
+                .get("data")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("id").and_then(|v| v.as_str()))
+                .map(|id| LlmModelOption {
+                    id: id.to_string(),
+                    label: id.to_string(),
+                })
+                .collect::<Vec<_>>()
+        }
+        ohmywu_llm_adapter::provider::ApiFormat::Anthropic => {
+            let url = if endpoint.ends_with("/v1") {
+                format!("{}/models", endpoint)
+            } else {
+                format!("{}/v1/models", endpoint)
+            };
+            let response = client
+                .get(url)
+                .header("x-api-key", api_key.unwrap_or_default())
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .error_for_status()
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("解析模型列表失败: {}", e))?;
+            response
+                .get("data")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("id").and_then(|v| v.as_str()))
+                .map(|id| LlmModelOption {
+                    id: id.to_string(),
+                    label: id.to_string(),
+                })
+                .collect::<Vec<_>>()
+        }
+        ohmywu_llm_adapter::provider::ApiFormat::Gemini => {
+            let base = if endpoint.contains("/v1beta") || endpoint.ends_with("/v1") {
+                endpoint
+            } else {
+                format!("{}/v1beta", endpoint)
+            };
+            let separator = if base.contains('?') { "&" } else { "?" };
+            let url = format!("{}/models{}key={}", base, separator, api_key.unwrap_or_default());
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .error_for_status()
+                .map_err(|e| format!("获取模型失败: {}", e))?
+                .json::<serde_json::Value>()
+                .await
+                .map_err(|e| format!("解析模型列表失败: {}", e))?;
+            response
+                .get("models")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("name").and_then(|v| v.as_str()))
+                .map(|name| {
+                    let label = name.strip_prefix("models/").unwrap_or(name).to_string();
+                    LlmModelOption {
+                        id: label.clone(),
+                        label,
+                    }
+                })
+                .collect::<Vec<_>>()
+        }
+    };
+
+    if options.is_empty() {
+        return Err("未获取到可用模型".into());
+    }
+
+    Ok(options)
+}
+
 // ── Tauri Commands: config ───────────────────────────────────────
 
 #[tauri::command]
@@ -735,7 +1085,7 @@ async fn get_config(
     state: tauri::State<'_, AppState>,
 ) -> Result<AppConfig, String> {
     let config = state.config.read().map_err(|e| format!("Lock: {}", e))?;
-    Ok(config.clone())
+    Ok(config.clone().normalized())
 }
 
 #[tauri::command]
@@ -743,13 +1093,11 @@ async fn save_config(
     config: AppConfig,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    // update policy engine
-    state.policy.set_mode(config.policy_mode);
-    // persist
-    config::save_config(&state.data_dir, &config)?;
-    // update in-memory
+    let normalized = config.normalized();
+    state.policy.set_mode(normalized.policy_mode);
+    config::save_config(&state.data_dir, &normalized)?;
     let mut current = state.config.write().map_err(|e| format!("Lock: {}", e))?;
-    *current = config;
+    *current = normalized;
     Ok(())
 }
 
@@ -941,8 +1289,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             get_capabilities,
+            upsert_capability,
+            set_capability_enabled,
+            delete_capability,
+            get_agents,
+            upsert_agent,
+            delete_agent,
             get_actions,
             refresh_actions,
+            upsert_action,
+            set_action_enabled,
+            delete_action,
             get_action_blueprint,
             get_policy_mode,
             get_agent_mode,
@@ -964,6 +1321,7 @@ pub fn run() {
             save_config,
             test_llm_connection,
             test_llm_connection_with_config,
+            fetch_llm_models,
             save_background_file,
             get_background_path,
             clear_background_file,

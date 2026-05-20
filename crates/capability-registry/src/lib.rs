@@ -20,6 +20,14 @@ impl CapabilityRegistry {
         caps.insert(cap.name.clone(), cap);
     }
 
+    pub fn replace_all(&self, items: Vec<Capability>) {
+        let mut caps = self.capabilities.write().unwrap();
+        caps.clear();
+        for cap in items {
+            caps.insert(cap.name.clone(), cap);
+        }
+    }
+
     pub fn get(&self, name: &str) -> Option<Capability> {
         let caps = self.capabilities.read().unwrap();
         caps.get(name).cloned()

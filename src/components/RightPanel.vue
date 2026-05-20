@@ -34,8 +34,6 @@ const emit = defineEmits<{ close: [] }>()
   min-width: 0;
   background: var(--shell-bg);
   border-left: 1px solid var(--border-color);
-  backdrop-filter: blur(var(--shell-blur));
-  -webkit-backdrop-filter: blur(var(--shell-blur));
   overflow: hidden;
   transition: width 0.3s var(--ease-out), background 0.3s ease;
   display: flex;

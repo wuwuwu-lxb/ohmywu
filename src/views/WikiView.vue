@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
 import { useWikiStore, type GraphData } from "../stores/wiki"
 
@@ -684,7 +685,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
     <div class="wiki-header">
       <div>
         <h1 class="wiki-title">知识库</h1>
-        <p class="wiki-subtitle">现在不只是浏览器，也是一套可编辑、可维护的本地知识面板。</p>
+        <p class="wiki-subtitle">统一管理笔记、链接和知识图谱。</p>
       </div>
       <div class="wiki-nav">
         <button class="ghost-btn" @click="startCreate">新建笔记</button>
@@ -700,7 +701,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
           <button :class="['scope-card', { active: folderFilter === 'all' }]" @click="folderFilter = 'all'">
             <span class="scope-label">全部范围</span>
             <strong class="scope-value">{{ store.notes.length }}</strong>
-            <span class="scope-note">当前知识库所有条目</span>
+            <span class="scope-note">全部条目</span>
           </button>
           <button
             v-for="scope in folderStats"
@@ -710,7 +711,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
           >
             <span class="scope-label">{{ scope.label }}</span>
             <strong class="scope-value">{{ scope.count }}</strong>
-            <span class="scope-note">可作为后续 agent 记忆范围</span>
+            <span class="scope-note">当前分类条目</span>
           </button>
         </div>
 
@@ -766,7 +767,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
             </div>
           </button>
           <p v-if="!filteredNotes.length && !store.loading" class="empty-hint">
-            还没有笔记。现在可以直接在这里新建和维护知识条目了。
+            还没有笔记。
           </p>
         </div>
       </div>
@@ -777,8 +778,8 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
           <div class="detail-actions">
             <button class="ghost-btn" @click="copyCurrentNote">复制 Markdown</button>
             <button v-if="editorMode === 'view' && store.current" class="ghost-btn" @click="startEdit">编辑</button>
-            <button v-if="editorMode === 'view' && store.current" class="ghost-btn danger-ghost" @click="deleteConfirm = !deleteConfirm">
-              {{ deleteConfirm ? "取消删除" : "删除" }}
+            <button v-if="editorMode === 'view' && store.current" class="ghost-btn danger-ghost" @click="deleteConfirm = true">
+              删除
             </button>
             <button v-if="editorMode !== 'view'" class="ghost-btn" @click="cancelEditor">取消</button>
             <button
@@ -791,13 +792,6 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
             </button>
             <span v-if="copyMsg" class="detail-msg">{{ copyMsg }}</span>
           </div>
-        </div>
-
-        <div v-if="deleteConfirm && store.current && editorMode === 'view'" class="danger-banner">
-          <span>确定删除「{{ store.current.title }}」吗？删除后不可恢复。</span>
-          <button class="danger-btn" :disabled="store.deleting" @click="deleteCurrentNote">
-            {{ store.deleting ? "删除中..." : "确认删除" }}
-          </button>
         </div>
 
         <div v-if="store.error" class="error-banner">{{ store.error }}</div>
@@ -831,7 +825,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
               >
                 {{ note.title }}
               </button>
-              <div v-if="!currentBacklinks.length" class="mini-empty">暂时没有条目引用这篇笔记。</div>
+              <div v-if="!currentBacklinks.length" class="mini-empty">暂无反向链接。</div>
             </section>
           </aside>
         </div>
@@ -922,12 +916,21 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
           </section>
 
           <section class="mini-panel">
-            <div class="mini-title">阅读提示</div>
-            <p class="graph-hint">节点按知识范围分组上色，悬停时会高亮相关连线，点击节点直接打开对应笔记。</p>
+            <div class="mini-title">图谱说明</div>
+            <p class="graph-hint">节点按分类着色，悬停高亮关联，点击直接打开笔记。</p>
           </section>
         </aside>
       </div>
     </div>
+
+    <ConfirmDialog
+      :open="deleteConfirm && !!store.current && editorMode === 'view'"
+      title="删除知识库笔记"
+      :message="store.current ? `确定删除「${store.current.title}」吗？删除后不可恢复。` : '确定删除当前笔记吗？'"
+      :loading="store.deleting"
+      @cancel="deleteConfirm = false"
+      @confirm="deleteCurrentNote"
+    />
   </div>
 </template>
 

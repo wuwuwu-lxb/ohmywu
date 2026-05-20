@@ -11,6 +11,7 @@ import {
 
 const preset = ref<ThemePreset>("midnight")
 const accent = ref(THEME_PRESETS.midnight.accent)
+const backgroundSolidColor = ref("#111827")
 const backgroundPreset = ref<BackgroundPreset>("noctis")
 const backgroundMode = ref<"solid" | "image">("solid")
 const backgroundImageUrl = ref("")
@@ -65,6 +66,7 @@ const deriveSolidPalette = (backgroundHex: string, seedHex: string) => {
 export function useTheme() {
   const initFromConfig = (cfg: {
     theme: string; accent: string;
+    background_solid_color?: string;
     background_preset: string; background_mode: string; surface_opacity: number;
     background_scale: number; background_blur: number; background_mask_opacity: number;
     background_auto_theme?: boolean;
@@ -73,6 +75,7 @@ export function useTheme() {
     preset.value = (cfg.theme as ThemePreset) || "midnight"
     accent.value = cfg.accent || THEME_PRESETS[preset.value].accent
     backgroundPreset.value = (cfg.background_preset as BackgroundPreset) || "noctis"
+    backgroundSolidColor.value = cfg.background_solid_color || BACKGROUND_PRESETS[backgroundPreset.value]?.css || "#111827"
     backgroundMode.value = cfg.background_mode === "image" ? "image" : "solid"
     backgroundAutoTheme.value = cfg.background_auto_theme ?? true
     backgroundThemeColor.value = cfg.background_theme_color || ""
@@ -93,10 +96,14 @@ export function useTheme() {
     backgroundAutoTheme.value = false
     applyTheme()
   }
+  const setBackgroundSolidColor = (color: string) => {
+    backgroundSolidColor.value = color
+    applyTheme()
+  }
   const setBackgroundPreset = (p: BackgroundPreset) => {
     backgroundPreset.value = p
     if (backgroundMode.value === "solid") {
-      accent.value = BACKGROUND_PRESETS[p].seed
+      backgroundSolidColor.value = BACKGROUND_PRESETS[p].css
     }
     applyTheme()
   }
@@ -108,9 +115,6 @@ export function useTheme() {
   const setSurfaceOpacity = (v: number) => { surfaceOpacity.value = Math.max(35, Math.min(88, v)); applyTheme() }
   const setBackgroundMode = (m: "solid" | "image") => {
     backgroundMode.value = m
-    if (m === "solid") {
-      accent.value = BACKGROUND_PRESETS[backgroundPreset.value].seed
-    }
     applyTheme()
   }
   const setBgScale = (v: number) => { bgScale.value = v; applyTheme() }
@@ -161,7 +165,10 @@ export function useTheme() {
     const mediaMode = backgroundMode.value !== "solid"
 
     if (!mediaMode) {
-      const palette = deriveSolidPalette(activePreset.css, accent.value || activePreset.seed)
+      const palette = deriveSolidPalette(
+        backgroundSolidColor.value || activePreset.css,
+        accent.value || activePreset.seed,
+      )
       shellBlur.value = 0
       d.style.setProperty("--bg-gradient", palette.background)
       d.style.setProperty("--surface-alpha", glass.toFixed(3))
@@ -179,7 +186,7 @@ export function useTheme() {
       d.style.setProperty("--text-tertiary", palette.textTertiary)
     } else {
       shellBlur.value = 20
-      d.style.setProperty("--bg-gradient", activePreset.css)
+      d.style.setProperty("--bg-gradient", backgroundSolidColor.value || activePreset.css)
       d.style.setProperty("--surface-alpha", glass.toFixed(3))
       d.style.setProperty("--surface-bg", `rgba(9, 11, 15, ${Math.max(0.58, glass * 1.78)})`)
       d.style.setProperty("--shell-bg", `rgba(7, 9, 13, 0.56)`)
@@ -209,6 +216,7 @@ export function useTheme() {
   const currentConfig = computed(() => ({
     theme: preset.value,
     accent: accent.value,
+    background_solid_color: backgroundSolidColor.value,
     background_preset: backgroundPreset.value,
     background_mode: backgroundMode.value,
     background_auto_theme: backgroundAutoTheme.value,
@@ -220,11 +228,11 @@ export function useTheme() {
   }))
 
   return {
-    preset, accent, backgroundPreset, backgroundMode, backgroundAutoTheme, backgroundThemeColor, surfaceOpacity,
+    preset, accent, backgroundSolidColor, backgroundPreset, backgroundMode, backgroundAutoTheme, backgroundThemeColor, surfaceOpacity,
     bgScale, bgBlur, bgMaskOpacity,
     backgroundImageUrl,
     currentConfig,
-    initFromConfig, setPreset, setAccent, setBackgroundPreset, setSurfaceOpacity,
+    initFromConfig, setPreset, setAccent, setBackgroundSolidColor, setBackgroundPreset, setSurfaceOpacity,
     setBackgroundMode, setBgScale, setBgBlur, setBgMaskOpacity,
     setBackgroundAutoTheme, setBackgroundThemeColor, syncBackgroundTheme,
     setBackgroundImage,

@@ -20,6 +20,7 @@ const props = defineProps<{
   memorySaving?: boolean
   memoryError?: string | null
   memorySaved?: SavedMemoryNote | null
+  memoryCollapsed?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -27,14 +28,19 @@ const emit = defineEmits<{
   "generate-memory": [turnId: string]
   "save-memory": [turnId: string]
   "clear-memory": [turnId: string]
+  "reopen-memory": [turnId: string]
   "update-memory-candidate": [payload: { turnId: string, patch: Partial<MemoryCandidate> }]
 }>()
 const copied = ref(false)
 const tagInput = ref("")
 
 const renderedHtml = computed(() => renderMarkdown(props.msg.content || ""))
+const hasMemoryData = computed(() =>
+  !!props.memoryCandidate || !!props.memorySaved
+)
 const memoryOpen = computed(() =>
-  !!props.memoryCandidate || !!props.memoryError || !!props.memoryGenerating || !!props.memorySaved
+  (!!props.memoryCandidate || !!props.memoryError || !!props.memoryGenerating || !!props.memorySaved)
+  && !props.memoryCollapsed
 )
 const memoryFolderOptions = [
   { label: "concepts", value: "concepts" },
@@ -103,6 +109,14 @@ function updateTags(value: string) {
               @click="emit('generate-memory', msg.turnId)"
             >
               {{ memoryGenerating ? "生成中" : memoryCandidate ? "重生成记忆" : "记忆候选" }}
+            </button>
+            <button
+              v-if="msg.turnId && hasMemoryData && memoryCollapsed"
+              class="copy-btn"
+              type="button"
+              @click="emit('reopen-memory', msg.turnId)"
+            >
+              展开记忆
             </button>
             <button class="copy-btn" type="button" @click="copyMessage">
               {{ copied ? "已复制" : "复制" }}
@@ -199,6 +213,15 @@ function updateTags(value: string) {
             </div>
           </template>
         </div>
+        <button
+          v-else-if="msg.turnId && hasMemoryData && memoryCollapsed"
+          class="memory-collapsed-pill"
+          type="button"
+          @click="emit('reopen-memory', msg.turnId)"
+        >
+          <span class="memory-collapsed-title">记忆候选已收起</span>
+          <span class="memory-collapsed-action">点击展开</span>
+        </button>
         <div v-if="msg.taskId" class="msg-task-link" @click="emit('show-task', msg.taskId!)">
           <span>查看执行链路</span>
           <span class="link-arrow">→</span>
@@ -447,6 +470,38 @@ function updateTags(value: string) {
 .memory-save-btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.memory-collapsed-pill {
+  margin-top: 10px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px dashed rgba(var(--accent-rgb), 0.22);
+  background: rgba(var(--accent-rgb), 0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+
+.memory-collapsed-pill:hover {
+  border-color: rgba(var(--accent-rgb), 0.32);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-primary);
+}
+
+.memory-collapsed-title,
+.memory-collapsed-action {
+  font-size: 12px;
+}
+
+.memory-collapsed-action {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
 }
 
 @media (max-width: 720px) {

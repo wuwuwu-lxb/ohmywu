@@ -5,18 +5,21 @@ import Sidebar from "./components/Sidebar.vue"
 import RightPanel from "./components/RightPanel.vue"
 import { useSidebarNav } from "./composables/useNav"
 import { useTheme } from "./composables/useTheme"
+import { useAgentStore } from "./stores/agents"
 import { useChatStore } from "./stores/chat"
 import ChatView from "./views/ChatView.vue"
 import AgentManagementView from "./views/AgentManagementView.vue"
 import ActionsView from "./views/ActionsView.vue"
 import AtomicCapabilitiesView from "./views/AtomicCapabilitiesView.vue"
 import AuditView from "./views/AuditView.vue"
+import ModelSettingsView from "./views/ModelSettingsView.vue"
 import SettingsView from "./views/SettingsView.vue"
 import WikiView from "./views/WikiView.vue"
 import type { Component } from "vue"
 
 const { items, register } = useSidebarNav()
 const chatStore = useChatStore()
+const agentStore = useAgentStore()
 const {
   initFromConfig,
   backgroundImageUrl,
@@ -32,6 +35,7 @@ const viewMap: Record<string, Component> = {
   chat: markRaw(ChatView),
   agents: markRaw(AgentManagementView),
   wiki: markRaw(WikiView),
+  models: markRaw(ModelSettingsView),
   atomic: markRaw(AtomicCapabilitiesView),
   actions: markRaw(ActionsView),
   audit: markRaw(AuditView),
@@ -64,9 +68,11 @@ const showChatConversationArrow = computed(
 )
 
 onMounted(async () => {
+  await agentStore.init()
   try {
     const cfg = await invoke<{
       theme: string; accent: string; background_mode: string;
+      background_solid_color: string;
       background_preset: string;
       surface_opacity: number; background_scale: number;
       background_blur: number; background_mask_opacity: number;
@@ -91,8 +97,9 @@ onMounted(async () => {
   register({ id: "chat", label: "对话", icon: "💬" })
   register({ id: "agents", label: "Agent 管理", icon: "🧠" })
   register({ id: "wiki", label: "知识库", icon: "📖" })
+  register({ id: "models", label: "模型设置", icon: "◌" })
   register({ id: "atomic", label: "原子化能力", icon: "⚙" })
-  register({ id: "actions", label: "Actions", icon: "⚡" })
+  register({ id: "actions", label: "Action 注册", icon: "⚡" })
   register({ id: "audit", label: "审计日志", icon: "📋" })
 })
 </script>
@@ -142,18 +149,9 @@ onMounted(async () => {
             >
               <span>›</span>
             </button>
-            <div class="topbar-title">
+            <div class="topbar-title" data-tauri-drag-region>
               <h1>{{ currentViewLabel }}</h1>
             </div>
-          </div>
-          <div class="topbar-right">
-            <div class="topbar-search">
-              <span class="topbar-search-icon">⌕</span>
-              <span class="topbar-search-text">搜索、命令或知识库</span>
-            </div>
-            <button class="topbar-btn" type="button" @click="activeView = '__settings__'">
-              <span>⚙</span>
-            </button>
           </div>
         </header>
 
@@ -166,9 +164,9 @@ onMounted(async () => {
       <RightPanel :open="rightPanelOpen" title="执行链路" @close="rightPanelOpen = false">
         <div v-if="rightPanelTaskId">
           <p>Task ID: {{ rightPanelTaskId }}</p>
-          <p class="panel-hint">完整执行链路将在后续版本中展示。</p>
+          <p class="panel-hint">执行详情会在这里展开。</p>
         </div>
-        <p v-else class="panel-placeholder">选中一条消息后，这里会显示执行链路详情。</p>
+        <p v-else class="panel-placeholder">选中一条消息查看执行详情。</p>
       </RightPanel>
     </div>
   </div>
@@ -176,18 +174,19 @@ onMounted(async () => {
 
 <style scoped>
 .app-shell {
-  height: 100vh;
-  width: 100vw;
+  height: 100%;
+  width: 100%;
   position: relative;
   overflow: hidden;
   background: var(--bg-gradient);
 }
 
 .background-container {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 0;
   overflow: hidden;
+  pointer-events: none;
 }
 
 .background-ambient {
@@ -225,8 +224,6 @@ onMounted(async () => {
   flex-direction: column;
   overflow: hidden;
   background: var(--shell-bg);
-  backdrop-filter: blur(var(--shell-blur));
-  -webkit-backdrop-filter: blur(var(--shell-blur));
   animation: fadeIn 0.5s 0.1s var(--ease-out) both;
 }
 
@@ -239,12 +236,9 @@ onMounted(async () => {
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
   background: var(--shell-bg-soft);
-  backdrop-filter: blur(calc(var(--shell-blur) * 0.6));
-  -webkit-backdrop-filter: blur(calc(var(--shell-blur) * 0.6));
 }
 
-.topbar-left,
-.topbar-right {
+.topbar-left {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -288,27 +282,6 @@ onMounted(async () => {
   font-family: var(--font-mono);
 }
 
-.topbar-search {
-  min-width: 260px;
-  height: 40px;
-  padding: 0 14px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border-color);
-  background: var(--surface-1);
-  color: var(--text-tertiary);
-}
-
-.topbar-search-icon {
-  font-size: 14px;
-}
-
-.topbar-search-text {
-  font-size: 12px;
-}
-
 .content-frame {
   flex: 1;
   min-height: 0;
@@ -317,8 +290,8 @@ onMounted(async () => {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .panel-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
@@ -331,10 +304,6 @@ onMounted(async () => {
 
   .content-frame {
     padding: 0 16px;
-  }
-
-  .topbar-search {
-    min-width: 180px;
   }
 }
 </style>

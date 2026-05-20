@@ -1,5 +1,6 @@
+import { invoke } from "@tauri-apps/api/core"
 import { defineStore } from "pinia"
-import { ref, watch } from "vue"
+import { computed, ref, watch } from "vue"
 
 export const MEMORY_SCOPE_FOLDERS = ["concepts", "notes", "daily", "profile"] as const
 
@@ -29,21 +30,46 @@ export interface AgentProfile {
   persona: string
   memoryScope: AgentMemoryScope
   tools: string[]
+  delegateTags: string[]
+  delegateNote: string
+  delegatable: boolean
+  delegatePriority: number
   primary: boolean
+  editable: boolean
+  deletable: boolean
+  persistedId?: string
 }
 
-interface LegacyAgentProfile {
-  id?: string
-  name?: string
-  role?: string
-  persona?: string
-  memoryScope?: unknown
-  tools?: unknown
-  primary?: boolean
+interface BackendAgentView {
+  id: string
+  name: string
+  role: string
+  persona: string
+  memoryScope: string
+  tools: string[]
+  delegateTags: string[]
+  delegateNote: string
+  delegatable: boolean
+  delegatePriority: number
+  primary: boolean
+  editable: boolean
+  deletable: boolean
 }
 
-const STORAGE_KEY = "ohmywu.agent-profiles.v2"
-const LEGACY_STORAGE_KEY = "ohmywu.agent-profiles.v1"
+interface AgentUpsertInput {
+  existingId: string | null
+  id: string
+  name: string
+  role: string
+  persona: string
+  memoryScope: string
+  tools: string[]
+  delegateTags: string[]
+  delegateNote: string
+  delegatable: boolean
+  delegatePriority: number
+}
+
 const ACTIVE_AGENT_KEY = "ohmywu.active-agent.v1"
 
 export function createMemoryScope(overrides: Partial<AgentMemoryScope> = {}): AgentMemoryScope {
@@ -73,7 +99,14 @@ function createAgentProfile(overrides: Partial<AgentProfile> = {}): AgentProfile
     persona: overrides.persona || "按当前角色稳定执行，优先清晰、可审计和低噪音。",
     memoryScope: normalizeMemoryScope(overrides.memoryScope),
     tools: normalizeTools(overrides.tools),
+    delegateTags: normalizeTags(overrides.delegateTags),
+    delegateNote: overrides.delegateNote?.trim() || "",
+    delegatable: overrides.delegatable ?? false,
+    delegatePriority: clampDelegatePriority(overrides.delegatePriority),
     primary: overrides.primary ?? false,
+    editable: overrides.editable ?? true,
+    deletable: overrides.deletable ?? !overrides.primary,
+    persistedId: overrides.persistedId,
   }
 }
 
@@ -90,7 +123,14 @@ function defaultAgents(): AgentProfile[] {
         notes: "适合纯即时任务，不注入历史知识。",
       }),
       tools: ["read", "grep", "glob", "bash", "wiki_read", "wiki_search"],
+      delegateTags: ["通用", "调度", "拆解", "执行"],
+      delegateNote: "默认入口。适合先理解需求、拆任务、串联其他 agent，不适合大量长期记忆召回。",
+      delegatable: false,
+      delegatePriority: 0,
       primary: true,
+      editable: true,
+      deletable: false,
+      persistedId: "core",
     }),
     createAgentProfile({
       id: "memory",
@@ -105,6 +145,13 @@ function defaultAgents(): AgentProfile[] {
         notes: "优先召回长期偏好、项目决策和近期沉淀。",
       }),
       tools: ["read", "wiki_read", "wiki_search", "wiki_write"],
+      delegateTags: ["记忆", "知识库", "归档", "总结", "复盘"],
+      delegateNote: "适合总结、长期知识沉淀、个人偏好整理、记忆候选和复盘归档。",
+      delegatable: true,
+      delegatePriority: 70,
+      editable: true,
+      deletable: true,
+      persistedId: "memory",
     }),
     createAgentProfile({
       id: "coder",
@@ -119,6 +166,13 @@ function defaultAgents(): AgentProfile[] {
         notes: "优先使用项目笔记、技术概念和实现约定。",
       }),
       tools: ["read", "grep", "glob", "edit", "write", "bash"],
+      delegateTags: ["代码", "修复", "构建", "测试", "前端", "后端"],
+      delegateNote: "适合读代码、改代码、构建检查、测试失败排查和工程实现。",
+      delegatable: true,
+      delegatePriority: 90,
+      editable: true,
+      deletable: true,
+      persistedId: "coder",
     }),
   ]
 }
@@ -147,6 +201,15 @@ export function normalizeMemoryScope(input: unknown): AgentMemoryScope {
 }
 
 function parseLegacyMemoryScope(scope: string): AgentMemoryScope {
+  try {
+    const parsed = JSON.parse(scope)
+    if (parsed && typeof parsed === "object") {
+      return normalizeMemoryScope(parsed)
+    }
+  } catch {
+    // fall through to legacy text parsing
+  }
+
   const scopeLower = scope.toLowerCase()
   if (!scopeLower.trim() || scopeLower.includes("none") || scopeLower.includes("无记忆")) {
     return createMemoryScope({
@@ -208,7 +271,18 @@ function normalizeTools(input: unknown): string[] {
   return [...new Set(input.filter((item): item is string => typeof item === "string" && item.trim().length > 0))]
 }
 
-function normalizeAgentProfile(input: LegacyAgentProfile, index: number): AgentProfile {
+function normalizeTags(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  return [...new Set(input.filter((item): item is string => typeof item === "string" && item.trim().length > 0))]
+}
+
+function clampDelegatePriority(input: unknown): number {
+  const value = typeof input === "number" ? input : Number(input)
+  if (!Number.isFinite(value)) return 50
+  return Math.max(0, Math.min(100, Math.round(value)))
+}
+
+function backendToAgentProfile(input: BackendAgentView, index: number): AgentProfile {
   return createAgentProfile({
     id: typeof input.id === "string" && input.id.trim() ? input.id : `agent-${index + 1}`,
     name: typeof input.name === "string" && input.name.trim() ? input.name : `Agent ${index + 1}`,
@@ -218,36 +292,15 @@ function normalizeAgentProfile(input: LegacyAgentProfile, index: number): AgentP
       : "按当前角色稳定执行，优先清晰、可审计和低噪音。",
     memoryScope: normalizeMemoryScope(input.memoryScope),
     tools: normalizeTools(input.tools),
+    delegateTags: normalizeTags(input.delegateTags),
+    delegateNote: typeof input.delegateNote === "string" ? input.delegateNote : "",
+    delegatable: input.delegatable === true,
+    delegatePriority: clampDelegatePriority(input.delegatePriority),
     primary: input.primary === true,
+    editable: input.editable !== false,
+    deletable: input.deletable === true,
+    persistedId: input.id,
   })
-}
-
-function ensurePrimary(agents: AgentProfile[]): AgentProfile[] {
-  if (!agents.length) {
-    return defaultAgents()
-  }
-  if (agents.some((agent) => agent.primary)) {
-    return agents
-  }
-  return agents.map((agent, index) => ({
-    ...agent,
-    primary: index === 0,
-  }))
-}
-
-function loadAgents(): AgentProfile[] {
-  if (typeof window === "undefined") {
-    return defaultAgents()
-  }
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY) || window.localStorage.getItem(LEGACY_STORAGE_KEY)
-    if (!raw) return defaultAgents()
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return defaultAgents()
-    return ensurePrimary(parsed.map((agent, index) => normalizeAgentProfile(agent, index)))
-  } catch {
-    return defaultAgents()
-  }
 }
 
 function uniqueAgentId(base: string, existingIds: Set<string>): string {
@@ -258,6 +311,48 @@ function uniqueAgentId(base: string, existingIds: Set<string>): string {
     index += 1
   }
   return next
+}
+
+function persistActiveAgent(id: string) {
+  if (typeof window === "undefined") return
+  window.localStorage.setItem(ACTIVE_AGENT_KEY, id)
+}
+
+function loadActiveAgent(): string {
+  if (typeof window === "undefined") return "core"
+  return window.localStorage.getItem(ACTIVE_AGENT_KEY) || "core"
+}
+
+function snapshotAgent(agent: AgentProfile): string {
+  return JSON.stringify({
+    id: agent.id,
+    name: agent.name,
+    role: agent.role,
+    persona: agent.persona,
+    memoryScope: serializeMemoryScope(agent.memoryScope),
+    tools: [...agent.tools].sort(),
+    delegateTags: [...agent.delegateTags].sort(),
+    delegateNote: agent.delegateNote,
+    delegatable: agent.delegatable,
+    delegatePriority: agent.delegatePriority,
+    primary: agent.primary,
+  })
+}
+
+function upsertPayload(agent: AgentProfile): AgentUpsertInput {
+  return {
+    existingId: agent.persistedId || null,
+    id: agent.id.trim(),
+    name: agent.name.trim(),
+    role: agent.role.trim(),
+    persona: agent.persona.trim(),
+    memoryScope: serializeMemoryScope(agent.memoryScope),
+    tools: normalizeTools(agent.tools),
+    delegateTags: normalizeTags(agent.delegateTags),
+    delegateNote: agent.delegateNote.trim(),
+    delegatable: agent.delegatable,
+    delegatePriority: clampDelegatePriority(agent.delegatePriority),
+  }
 }
 
 export function summarizeMemoryScope(scope: AgentMemoryScope): string {
@@ -285,34 +380,139 @@ export function serializeMemoryScope(scope: AgentMemoryScope): string {
 }
 
 export const useAgentStore = defineStore("agents", () => {
-  const agents = ref<AgentProfile[]>(loadAgents())
-  const activeAgentId = ref<string>(
-    typeof window === "undefined"
-      ? "core"
-      : window.localStorage.getItem(ACTIVE_AGENT_KEY) || "core"
-  )
+  const agents = ref<AgentProfile[]>([])
+  const activeAgentId = ref<string>(loadActiveAgent())
+  const loading = ref(false)
+  const loaded = ref(false)
+  const syncError = ref("")
+  const saving = ref<Record<string, boolean>>({})
+
+  let initPromise: Promise<void> | null = null
+  let hydrating = false
+  const snapshots = new Map<string, string>()
+  const saveTimers = new Map<string, number>()
+
+  const availableAgents = computed(() => agents.value)
+
+  function rememberSnapshots(items: AgentProfile[]) {
+    snapshots.clear()
+    for (const agent of items) {
+      snapshots.set(agent.persistedId || agent.id, snapshotAgent(agent))
+    }
+  }
+
+  function applyAgents(items: AgentProfile[]) {
+    hydrating = true
+    agents.value = items
+    if (!items.some((agent) => agent.id === activeAgentId.value)) {
+      activeAgentId.value = items[0]?.id || "core"
+    }
+    persistActiveAgent(activeAgentId.value)
+    rememberSnapshots(items)
+    hydrating = false
+  }
+
+  async function refresh() {
+    loading.value = true
+    syncError.value = ""
+    try {
+      const list = await invoke<BackendAgentView[]>("get_agents")
+      applyAgents(list.map(backendToAgentProfile))
+      loaded.value = true
+    } catch (error) {
+      console.error("load agents:", error)
+      syncError.value = String(error)
+      if (!loaded.value) {
+        applyAgents(defaultAgents())
+        loaded.value = true
+      }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function init(force = false) {
+    if (loaded.value && !force) return
+    if (!force && initPromise) {
+      await initPromise
+      return
+    }
+    initPromise = refresh().finally(() => {
+      initPromise = null
+    })
+    await initPromise
+  }
+
+  async function persistAgent(agent: AgentProfile) {
+    const agentKey = agent.persistedId || agent.id
+    const payload = upsertPayload(agent)
+    saving.value = { ...saving.value, [agentKey]: true }
+    try {
+      const list = await invoke<BackendAgentView[]>("upsert_agent", { input: payload })
+      const updated = list.map(backendToAgentProfile)
+      const next = updated.find((item) => item.id === payload.id)
+      if (next) {
+        agent.persistedId = next.id
+        agent.primary = next.primary
+        agent.editable = next.editable
+        agent.deletable = next.deletable
+      } else {
+        agent.persistedId = payload.id
+      }
+      snapshots.delete(agentKey)
+      snapshots.set(agent.persistedId || agent.id, snapshotAgent(agent))
+      syncError.value = ""
+    } catch (error) {
+      console.error("persist agent:", error)
+      syncError.value = String(error)
+    } finally {
+      const nextSaving = { ...saving.value }
+      delete nextSaving[agentKey]
+      delete nextSaving[agent.persistedId || agent.id]
+      saving.value = nextSaving
+    }
+  }
+
+  function schedulePersist(agent: AgentProfile) {
+    if (!loaded.value || hydrating) return
+    const key = agent.persistedId || agent.id
+    const current = snapshotAgent(agent)
+    if (snapshots.get(key) === current) return
+
+    const existing = saveTimers.get(key)
+    if (existing) {
+      window.clearTimeout(existing)
+    }
+
+    const timer = window.setTimeout(() => {
+      saveTimers.delete(key)
+      persistAgent(agent)
+    }, 320)
+    saveTimers.set(key, timer)
+  }
+
+  watch(activeAgentId, (value) => {
+    persistActiveAgent(value)
+  })
 
   watch(
     agents,
-    (value) => {
-      if (typeof window === "undefined") return
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value))
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+    (items) => {
+      if (hydrating) return
+      for (const agent of items) {
+        schedulePersist(agent)
+      }
     },
     { deep: true }
   )
 
-  watch(activeAgentId, (value) => {
-    if (typeof window === "undefined") return
-    window.localStorage.setItem(ACTIVE_AGENT_KEY, value)
-  })
-
   function setActiveAgent(id: string) {
-    if (!agents.value.some((agent) => agent.id === id)) return
+    if (!availableAgents.value.some((agent) => agent.id === id)) return
     activeAgentId.value = id
   }
 
-  function addAgent() {
+  async function addAgent() {
+    await init()
     const existingIds = new Set(agents.value.map((agent) => agent.id))
     const id = uniqueAgentId("custom-agent", existingIds)
     const agent = createAgentProfile({
@@ -326,12 +526,20 @@ export const useAgentStore = defineStore("agents", () => {
         recallLimit: 4,
       }),
       tools: ["read", "grep", "glob", "wiki_read", "wiki_search"],
+      delegateTags: ["自定义"],
+      delegateNote: "",
+      delegatable: true,
+      delegatePriority: 50,
+      editable: true,
+      deletable: true,
     })
     agents.value = [...agents.value, agent]
     activeAgentId.value = agent.id
+    await persistAgent(agent)
   }
 
-  function duplicateAgent(id: string) {
+  async function duplicateAgent(id: string) {
+    await init()
     const source = agents.value.find((agent) => agent.id === id)
     if (!source) return
     const existingIds = new Set(agents.value.map((agent) => agent.id))
@@ -341,35 +549,44 @@ export const useAgentStore = defineStore("agents", () => {
       id: nextId,
       name: `${source.name} 副本`,
       primary: false,
+      deletable: true,
       memoryScope: createMemoryScope(source.memoryScope),
       tools: [...source.tools],
+      persistedId: undefined,
     })
     agents.value = [...agents.value, clone]
     activeAgentId.value = clone.id
+    await persistAgent(clone)
   }
 
-  function removeAgent(id: string) {
+  async function removeAgent(id: string) {
+    await init()
     const target = agents.value.find((agent) => agent.id === id)
-    if (!target || target.primary) return
-    const next = ensurePrimary(agents.value.filter((agent) => agent.id !== id))
-    agents.value = next
-    if (activeAgentId.value === id) {
-      activeAgentId.value = next[0]?.id || "core"
-    }
-  }
+    if (!target || !target.deletable) return
 
-  function reset() {
-    agents.value = defaultAgents()
-    activeAgentId.value = "core"
+    try {
+      const list = await invoke<BackendAgentView[]>("delete_agent", { id })
+      applyAgents(list.map(backendToAgentProfile))
+      syncError.value = ""
+    } catch (error) {
+      console.error("delete agent:", error)
+      syncError.value = String(error)
+    }
   }
 
   return {
     agents,
+    availableAgents,
     activeAgentId,
+    loading,
+    loaded,
+    syncError,
+    saving,
+    init,
+    refresh,
     setActiveAgent,
     addAgent,
     duplicateAgent,
     removeAgent,
-    reset,
   }
 })

@@ -215,3 +215,5 @@ cargo test
 
 - `plan.md`
 - `book/claude-reference.md`
+- `book/guide.md`
+- `book/release-checklist.md`
