@@ -381,12 +381,7 @@ pub async fn agent_loop(
             last_task_id = Some(result.task_id.clone());
             executions.push(exec_record);
 
-            let tool_result = match result.status.as_str() {
-                "success" => result.output.clone().unwrap_or_else(|| "(empty)".into()),
-                "denied" => format!("权限不足：{}", result.error.as_deref().unwrap_or_default()),
-                "needs_confirm" => result.output.clone().unwrap_or_default(),
-                status => format!("{}：{}", status, result.error.as_deref().unwrap_or_default()),
-            };
+            let tool_result = build_tool_receipt(capability, input, result);
 
             messages.push(ChatMessage::tool(&tool_result, tc_id));
 
@@ -921,6 +916,89 @@ fn render_execution_fact(execution: &ExecutionRecord) -> String {
             input
         ),
     }
+}
+
+fn build_tool_receipt(
+    capability: &str,
+    input: &str,
+    result: &tools::ExecuteResult,
+) -> String {
+    let executed = match result.status.as_str() {
+        "success" | "failed" => "yes",
+        "denied" | "needs_confirm" | "not_found" => "no",
+        _ => "unknown",
+    };
+    let mut lines = vec![
+        "# TOOL_EXECUTION_RECEIPT".to_string(),
+        format!("tool: {}", capability),
+        format!("status: {}", result.status),
+        format!("executed: {}", executed),
+        format!("task_id: {}", result.task_id),
+        format!("duration_ms: {}", result.duration_ms),
+        format!("input_summary: {}", preview_text(input.trim(), 180)),
+    ];
+
+    if let Some(path) = result.artifact_path.as_deref() {
+        lines.push(format!("artifact_path: {}", path));
+    }
+
+    match result.status.as_str() {
+        "success" => {
+            lines.push(format!(
+                "output_summary: {}",
+                preview_text(result.output.as_deref().unwrap_or("(empty)"), 480)
+            ));
+            lines.push(
+                "rule: treat this result as verified real execution. Reuse it unless a newer tool result contradicts it."
+                    .to_string(),
+            );
+        }
+        "failed" => {
+            lines.push(format!(
+                "error_summary: {}",
+                preview_text(result.error.as_deref().unwrap_or("unknown error"), 240)
+            ));
+            lines.push(
+                "rule: the tool was attempted but did not complete successfully. Do not pretend the intended change happened."
+                    .to_string(),
+            );
+        }
+        "denied" => {
+            lines.push(format!(
+                "error_summary: {}",
+                preview_text(result.error.as_deref().unwrap_or("permission denied"), 240)
+            ));
+            lines.push(
+                "rule: the tool was blocked before execution. Nothing changed in the real environment."
+                    .to_string(),
+            );
+        }
+        "needs_confirm" => {
+            lines.push(format!(
+                "pending_summary: {}",
+                preview_text(result.output.as_deref().unwrap_or("waiting for confirmation"), 240)
+            ));
+            lines.push(
+                "rule: the tool has not executed yet. Ask the user for confirmation before claiming any effect."
+                    .to_string(),
+            );
+        }
+        _ => {
+            lines.push(format!(
+                "detail_summary: {}",
+                preview_text(
+                    result
+                        .error
+                        .as_deref()
+                        .or(result.output.as_deref())
+                        .unwrap_or(""),
+                    240
+                )
+            ));
+        }
+    }
+
+    lines.join("\n")
 }
 
 fn extract_named_arg(input: &str, key: &str) -> Option<String> {

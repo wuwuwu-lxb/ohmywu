@@ -27,6 +27,11 @@ const props = defineProps<{ exec: ExecutionInfo }>()
 const expanded = ref(false)
 const meta = computed(() => getToolMeta(props.exec.action))
 const statusText = computed(() => toolStatusLabel(props.exec.status))
+const executionStateText = computed(() => {
+  if (props.exec.status === "success" || props.exec.status === "failed") return "已执行"
+  if (props.exec.status === "denied" || props.exec.status === "needs_confirm") return "未执行"
+  return "状态未知"
+})
 </script>
 
 <template>
@@ -35,7 +40,7 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
       <span :class="['exec-status-dot', exec.status]" />
       <span class="exec-copy">
         <span class="exec-action truncate">{{ meta.label }}</span>
-        <span class="exec-action-sub">{{ exec.action }} · {{ statusText }}</span>
+        <span class="exec-action-sub">{{ exec.action }} · {{ statusText }} · {{ executionStateText }}</span>
       </span>
       <span v-if="exec.duration" class="exec-duration">{{ exec.duration }}</span>
       <span v-if="exec.artifactPath" class="exec-badge">artifact</span>
