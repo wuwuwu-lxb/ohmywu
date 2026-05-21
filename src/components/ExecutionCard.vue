@@ -7,6 +7,7 @@ export interface ExecutionInfo {
   status: "running" | "success" | "failed" | "denied" | "needs_confirm"
   input?: string
   output?: string
+  artifactPath?: string
   error?: string
   duration?: string
   delegated?: {
@@ -37,6 +38,7 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
         <span class="exec-action-sub">{{ exec.action }} · {{ statusText }}</span>
       </span>
       <span v-if="exec.duration" class="exec-duration">{{ exec.duration }}</span>
+      <span v-if="exec.artifactPath" class="exec-badge">artifact</span>
       <span class="exec-chevron">{{ expanded ? "▾" : "▸" }}</span>
     </button>
 
@@ -49,6 +51,11 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
       <div v-if="exec.output" class="exec-section">
         <span class="exec-label">输出</span>
         <pre class="exec-code">{{ exec.output }}</pre>
+      </div>
+      <div v-if="exec.artifactPath" class="exec-section">
+        <span class="exec-label">完整输出</span>
+        <div class="exec-artifact-note">大结果已落到本地 artifact，需要时可再次读取这个路径。</div>
+        <pre class="exec-code exec-artifact-path">{{ exec.artifactPath }}</pre>
       </div>
       <div v-if="exec.error" class="exec-section error">
         <span class="exec-label">错误</span>
@@ -168,6 +175,17 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
   font-size: 11px;
 }
 
+.exec-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
 .exec-chevron {
   color: var(--text-tertiary);
   font-size: 10px;
@@ -191,6 +209,17 @@ const statusText = computed(() => toolStatusLabel(props.exec.status))
 
 .exec-section:last-child {
   margin-bottom: 0;
+}
+
+.exec-artifact-note {
+  margin-bottom: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.exec-artifact-path {
+  word-break: break-all;
 }
 
 .delegate-block {

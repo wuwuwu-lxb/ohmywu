@@ -23,6 +23,7 @@ export interface ExecutionInfo {
   status: "running" | "success" | "failed" | "denied" | "needs_confirm"
   input?: string
   output?: string
+  artifactPath?: string
   error?: string
   duration?: string
   delegated?: DelegatedExecution | null
@@ -80,6 +81,7 @@ interface BackendExec {
   capability: string
   input: string
   output?: string
+  artifact_path?: string
   error?: string
   status: string
   duration_ms: number
@@ -199,6 +201,7 @@ function parseDelegatedExecution(raw: unknown): DelegatedExecution | null {
           status: normalizeExecStatus(typeof entry.status === "string" ? entry.status : "failed"),
           input: typeof entry.input === "string" ? entry.input : undefined,
           output: typeof entry.output === "string" ? entry.output : undefined,
+          artifactPath: typeof entry.artifactPath === "string" ? entry.artifactPath : undefined,
           error: typeof entry.error === "string" ? entry.error : undefined,
           duration: typeof entry.durationMs === "number" ? formatDuration(entry.durationMs) : undefined,
         } satisfies ExecutionInfo
@@ -248,6 +251,7 @@ function backendMsgToChatMsg(msg: BackendMessage): ChatMsg {
         status: normalizeExecStatus(e.status),
         input: e.input,
         output: delegated ? undefined : e.output,
+        artifactPath: e.artifact_path,
         error: e.error,
         duration: `${(e.duration_ms / 1000).toFixed(1)}s`,
         delegated,
@@ -390,6 +394,7 @@ export const useChatStore = defineStore("chat", () => {
           if (existing) {
             existing.status = "running"
             existing.input = typeof payload.inputPreview === "string" ? payload.inputPreview : existing.input
+            existing.artifactPath = typeof payload.artifactPath === "string" ? payload.artifactPath : existing.artifactPath
             continue
           }
           const tool: RuntimeToolState = {
@@ -397,6 +402,7 @@ export const useChatStore = defineStore("chat", () => {
             action: capability,
             status: "running",
             input: typeof payload.inputPreview === "string" ? payload.inputPreview : undefined,
+            artifactPath: typeof payload.artifactPath === "string" ? payload.artifactPath : undefined,
             delegated: null,
           }
           toolsById[toolCallId] = tool
@@ -436,6 +442,7 @@ export const useChatStore = defineStore("chat", () => {
               : typeof payload.outputPreview === "string"
                 ? payload.outputPreview
                 : existing.output
+            existing.artifactPath = typeof payload.artifactPath === "string" ? payload.artifactPath : existing.artifactPath
             existing.error = typeof payload.errorPreview === "string" ? payload.errorPreview : existing.error
             existing.duration = durationMs != null ? formatDuration(durationMs) : existing.duration
             if (delegated) {
@@ -452,6 +459,7 @@ export const useChatStore = defineStore("chat", () => {
                 : typeof payload.outputPreview === "string"
                   ? payload.outputPreview
                   : undefined,
+              artifactPath: typeof payload.artifactPath === "string" ? payload.artifactPath : undefined,
               error: typeof payload.errorPreview === "string" ? payload.errorPreview : undefined,
               duration: durationMs != null ? formatDuration(durationMs) : undefined,
               delegated,

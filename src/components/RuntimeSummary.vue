@@ -88,6 +88,33 @@ const memoryRecalls = computed(() =>
     })
 )
 
+const executionFacts = computed(() =>
+  props.runtime.events
+    .filter((event) => event.kind === "execution.facts.recalled")
+    .flatMap((event) => {
+      const payload = event.payload || {}
+      const facts = Array.isArray(payload.facts) ? payload.facts : []
+      return facts
+        .map((fact) => {
+          if (!fact || typeof fact !== "object") return null
+          const item = fact as Record<string, unknown>
+          return {
+            key: typeof item.key === "string" ? item.key : "",
+            summary: typeof item.summary === "string" ? item.summary : "",
+            sourceTool: typeof item.sourceTool === "string" ? item.sourceTool : "tool",
+            sticky: item.sticky === true,
+          }
+        })
+        .filter(Boolean) as Array<{ key: string, summary: string, sourceTool: string, sticky: boolean }>
+    })
+)
+
+const taskState = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "task.state.recalled")
+)
+
 const latestMemoryCandidate = computed(() =>
   [...props.runtime.events]
     .reverse()
@@ -151,6 +178,63 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
     </button>
 
     <div v-if="expanded" class="runtime-body">
+      <div v-if="taskState" class="task-state-card">
+        <div class="runtime-section-title">任务状态</div>
+        <div v-if="taskState.payload?.lastUserGoal" class="task-state-line">
+          <span class="task-state-label">最近目标</span>
+          <span>{{ String(taskState.payload.lastUserGoal) }}</span>
+        </div>
+        <div v-if="taskState.payload?.lastAgentSummary" class="task-state-line">
+          <span class="task-state-label">最近回复</span>
+          <span>{{ String(taskState.payload.lastAgentSummary) }}</span>
+        </div>
+        <div v-if="Array.isArray(taskState.payload?.completed) && taskState.payload.completed.length" class="task-state-group">
+          <span class="task-state-label">已完成</span>
+          <div
+            v-for="(item, index) in taskState.payload.completed"
+            :key="`completed-${index}`"
+            class="task-state-bullet"
+          >
+            {{ String(item) }}
+          </div>
+        </div>
+        <div v-if="Array.isArray(taskState.payload?.pendingConfirmation) && taskState.payload.pendingConfirmation.length" class="task-state-group">
+          <span class="task-state-label">待确认</span>
+          <div
+            v-for="(item, index) in taskState.payload.pendingConfirmation"
+            :key="`pending-${index}`"
+            class="task-state-bullet"
+          >
+            {{ String(item) }}
+          </div>
+        </div>
+        <div v-if="Array.isArray(taskState.payload?.blockers) && taskState.payload.blockers.length" class="task-state-group">
+          <span class="task-state-label">当前阻塞</span>
+          <div
+            v-for="(item, index) in taskState.payload.blockers"
+            :key="`blocker-${index}`"
+            class="task-state-bullet"
+          >
+            {{ String(item) }}
+          </div>
+        </div>
+      </div>
+
+      <div v-if="executionFacts.length" class="fact-list">
+        <div class="runtime-section-title">已验证事实</div>
+        <div
+          v-for="fact in executionFacts"
+          :key="`${runtime.turn.id}-${fact.key}`"
+          class="fact-card"
+        >
+          <div class="fact-top">
+            <span class="fact-tool">{{ fact.sourceTool }}</span>
+            <span v-if="fact.sticky" class="fact-badge">sticky</span>
+          </div>
+          <div class="fact-summary">{{ fact.summary }}</div>
+        </div>
+      </div>
+
       <div v-if="memoryRecalls.length" class="memory-recall-list">
         <div class="runtime-section-title">记忆召回</div>
         <div
@@ -350,10 +434,13 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   min-width: 72px;
 }
 
+.fact-list,
 .memory-recall-list {
   margin-top: 10px;
 }
 
+.task-state-card,
+.fact-card,
 .memory-recall-card,
 .memory-runtime-meta {
   margin-top: 8px;
@@ -363,6 +450,8 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   background: rgba(var(--accent-rgb), 0.04);
 }
 
+.task-state-line,
+.fact-top,
 .memory-recall-top,
 .memory-runtime-line {
   display: flex;
@@ -371,19 +460,55 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   flex-wrap: wrap;
 }
 
+.fact-tool,
+.fact-badge,
 .memory-folder {
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(var(--accent-rgb), 0.12);
-  border: 1px solid rgba(var(--accent-rgb), 0.18);
   font-size: 10px;
   font-family: var(--font-mono);
+}
+
+.fact-tool,
+.memory-folder {
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
   color: var(--text-primary);
 }
 
+.fact-badge {
+  background: rgba(var(--accent-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-rgb), 0.14);
+  color: var(--accent);
+}
+
+.task-state-label,
+.fact-summary,
 .memory-title-line {
   font-size: 12px;
   color: var(--text-primary);
+}
+
+.task-state-label {
+  min-width: 68px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.task-state-group {
+  margin-top: 8px;
+}
+
+.task-state-bullet {
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.fact-summary {
+  margin-top: 8px;
+  line-height: 1.55;
 }
 
 .memory-snippet {

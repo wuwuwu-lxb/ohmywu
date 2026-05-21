@@ -80,6 +80,32 @@ pub struct AgentResponse {
     pub task_id: Option<String>,
 }
 
+struct ExecutionContext {
+    fact_count: usize,
+    facts: Vec<ExecutionFact>,
+    text: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TaskStateContext {
+    last_user_goal: Option<String>,
+    last_agent_summary: Option<String>,
+    completed: Vec<String>,
+    pending_confirmation: Vec<String>,
+    blockers: Vec<String>,
+    text: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionFact {
+    key: String,
+    summary: String,
+    source_tool: String,
+    sticky: bool,
+}
+
 /// Run the agent conversation loop.
 /// If `app_handle` is provided, streams content deltas via "chat-stream" events.
 pub async fn agent_loop(
@@ -94,6 +120,7 @@ pub async fn agent_loop(
 ) -> std::result::Result<AgentResponse, LlmError> {
     let provider = create_provider(llm_config)?;
     let turn_started = Instant::now();
+    let history = state.session.load_session(session_id).unwrap_or_default();
 
     // Step 1: Health check — fast fail if unreachable
     provider.health_check().await?;
@@ -105,6 +132,8 @@ pub async fn agent_loop(
     let mut executions: Vec<ExecutionRecord> = Vec::new();
     let mut last_task_id: Option<String> = None;
     let memory_context = build_memory_context(state, agent_profile, user_message);
+    let task_state_context = build_task_state_context(&history, turn_id);
+    let execution_context = build_execution_context(&history);
 
     if let Some(handle) = app_handle
         && let Some(memory) = &memory_context
@@ -123,16 +152,53 @@ pub async fn agent_loop(
         let _ = handle.emit("runtime-event", &event);
     }
 
+    if let Some(handle) = app_handle
+        && let Some(task_state) = &task_state_context
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "task.state.recalled",
+            "注入最近任务状态",
+            serde_json::json!({
+                "lastUserGoal": task_state.last_user_goal,
+                "lastAgentSummary": task_state.last_agent_summary,
+                "completed": task_state.completed,
+                "pendingConfirmation": task_state.pending_confirmation,
+                "blockers": task_state.blockers,
+            }),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
+
+    if let Some(handle) = app_handle
+        && let Some(execution) = &execution_context
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "execution.facts.recalled",
+            &format!("注入 {} 条已验证执行事实", execution.fact_count),
+            serde_json::json!({
+                "factCount": execution.fact_count,
+                "facts": execution.facts,
+                "preview": execution.text,
+            }),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
+
     // build initial messages
     let mut messages: Vec<ChatMessage> = Vec::new();
     messages.push(ChatMessage::system(&build_system_prompt(
         state,
         agent_profile,
         memory_context.as_ref(),
+        task_state_context.as_ref(),
+        execution_context.as_ref(),
     )));
 
     // include recent session history (last 20 messages)
-    let history = state.session.load_session(session_id).unwrap_or_default();
     for msg in history.iter().rev().take(20).rev() {
         messages.push(ChatMessage {
             role: msg.role.clone(),
@@ -306,6 +372,7 @@ pub async fn agent_loop(
                 capability: capability.clone(),
                 input: input.clone(),
                 output: result.output.clone(),
+                artifact_path: result.artifact_path.clone(),
                 error: result.error.clone(),
                 status: result.status.clone(),
                 duration_ms: result.duration_ms,
@@ -340,6 +407,7 @@ pub async fn agent_loop(
                         "toolCallId": tc_id,
                         "inputPreview": preview_text(input, 256),
                         "outputPreview": preview_text(result.output.as_deref().unwrap_or(""), 512),
+                        "artifactPath": result.artifact_path,
                         "errorPreview": result.error.as_deref().map(|s| preview_text(s, 256)),
                         "durationMs": result.duration_ms,
                         "taskId": result.task_id,
@@ -478,6 +546,8 @@ fn build_system_prompt(
     state: &AppState,
     agent_profile: Option<&AgentInvocationProfile>,
     memory_context: Option<&MemoryContext>,
+    task_state_context: Option<&TaskStateContext>,
+    execution_context: Option<&ExecutionContext>,
 ) -> String {
     let agent_mode = state
         .config
@@ -513,8 +583,20 @@ fn build_system_prompt(
     });
     let tool_note = Some(build_tool_prompt(state));
     let memory_note = memory_context.map(|memory| format!("## 已注入记忆\n{}", memory.text));
+    let task_state_note = task_state_context.map(|task_state| {
+        format!(
+            "## 当前任务状态\n{}\n\n优先延续这里的已确认状态，而不是每轮重新猜测任务进度。",
+            task_state.text
+        )
+    });
+    let execution_note = execution_context.map(|execution| {
+        format!(
+            "## 最近已验证执行事实\n{}\n\n这些事实来自最近真实工具执行结果。除非有新的工具结果推翻它们，否则不要忽略、改写或凭空假设不同状态。",
+            execution.text
+        )
+    });
 
-    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note]
+    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note, task_state_note, execution_note]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -541,6 +623,313 @@ fn build_tool_prompt(state: &AppState) -> String {
         ));
     }
     lines.join("\n")
+}
+
+fn build_task_state_context(messages: &[SessionMessage], current_turn_id: &str) -> Option<TaskStateContext> {
+    let previous_messages = messages
+        .iter()
+        .filter(|msg| msg.turn_id.as_deref() != Some(current_turn_id))
+        .collect::<Vec<_>>();
+
+    if previous_messages.is_empty() {
+        return None;
+    }
+
+    let last_user_goal = previous_messages
+        .iter()
+        .rev()
+        .find(|msg| msg.role == "user" && !msg.content.trim().is_empty())
+        .map(|msg| preview_text(msg.content.trim(), 180));
+
+    let last_agent_summary = previous_messages
+        .iter()
+        .rev()
+        .find(|msg| msg.role == "agent" && !msg.content.trim().is_empty())
+        .map(|msg| preview_text(msg.content.trim(), 180));
+
+    let mut completed = Vec::new();
+    let mut pending_confirmation = Vec::new();
+    let mut blockers = Vec::new();
+
+    for msg in previous_messages.iter().rev() {
+        let Some(executions) = &msg.executions else {
+            continue;
+        };
+        for execution in executions.iter().rev() {
+            match execution.status.as_str() {
+                "success" if completed.len() < 4 => {
+                    completed.push(render_execution_fact(execution))
+                }
+                "needs_confirm" if pending_confirmation.len() < 3 => {
+                    pending_confirmation.push(render_execution_fact(execution))
+                }
+                "failed" | "denied" if blockers.len() < 3 => {
+                    blockers.push(render_execution_fact(execution))
+                }
+                _ => {}
+            }
+        }
+        if completed.len() >= 4 && pending_confirmation.len() >= 3 && blockers.len() >= 3 {
+            break;
+        }
+    }
+
+    completed.reverse();
+    pending_confirmation.reverse();
+    blockers.reverse();
+
+    let mut sections = Vec::new();
+    if let Some(goal) = &last_user_goal {
+        sections.push(format!("- 最近目标：{}", goal));
+    }
+    if let Some(summary) = &last_agent_summary {
+        sections.push(format!("- 最近回复摘要：{}", summary));
+    }
+    if !completed.is_empty() {
+        sections.push(format!(
+            "- 已完成：\n{}",
+            completed
+                .iter()
+                .map(|item| format!("  - {}", item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !pending_confirmation.is_empty() {
+        sections.push(format!(
+            "- 待确认：\n{}",
+            pending_confirmation
+                .iter()
+                .map(|item| format!("  - {}", item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    if !blockers.is_empty() {
+        sections.push(format!(
+            "- 当前阻塞：\n{}",
+            blockers
+                .iter()
+                .map(|item| format!("  - {}", item))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    if sections.is_empty() {
+        return None;
+    }
+
+    Some(TaskStateContext {
+        last_user_goal,
+        last_agent_summary,
+        completed,
+        pending_confirmation,
+        blockers,
+        text: sections.join("\n"),
+    })
+}
+
+fn build_execution_context(messages: &[SessionMessage]) -> Option<ExecutionContext> {
+    let mut seen = HashMap::<String, ()>::new();
+    let mut sticky_facts = Vec::new();
+    let mut recent_facts = Vec::new();
+
+    for msg in messages.iter().rev() {
+        let Some(executions) = &msg.executions else {
+            continue;
+        };
+
+        for execution in executions.iter().rev() {
+            for fact in extract_execution_facts(execution) {
+                if seen.contains_key(&fact.key) {
+                    continue;
+                }
+                seen.insert(fact.key.clone(), ());
+
+                if fact.sticky {
+                    sticky_facts.push(fact);
+                } else {
+                    recent_facts.push(fact);
+                }
+
+                if sticky_facts.len() >= 4 && recent_facts.len() >= 4 {
+                    break;
+                }
+            }
+        }
+
+        if sticky_facts.len() >= 4 && recent_facts.len() >= 4 {
+            break;
+        }
+    }
+
+    if sticky_facts.is_empty() && recent_facts.is_empty() {
+        return None;
+    }
+
+    sticky_facts.reverse();
+    recent_facts.reverse();
+    let facts = sticky_facts
+        .into_iter()
+        .chain(recent_facts)
+        .take(8)
+        .collect::<Vec<_>>();
+
+    Some(ExecutionContext {
+        fact_count: facts.len(),
+        facts: facts.clone(),
+        text: facts
+            .into_iter()
+            .enumerate()
+            .map(|(index, fact)| format!("{}. {}", index + 1, fact.summary))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    })
+}
+
+fn extract_execution_facts(execution: &ExecutionRecord) -> Vec<ExecutionFact> {
+    let capability = execution.capability.trim().to_string();
+    let input = execution.input.trim();
+    let status = execution.status.as_str();
+    let output = execution.output.as_deref().unwrap_or("").trim();
+
+    if capability == "bash" && status == "success" {
+        let command = extract_named_arg(input, "command").unwrap_or_else(|| input.to_string());
+        let command_trimmed = command.trim();
+        let first_line = output.lines().next().unwrap_or("").trim();
+
+        if command_trimmed == "pwd" && !first_line.is_empty() {
+            return vec![ExecutionFact {
+                key: "env.cwd".into(),
+                summary: format!("已验证当前工作目录为 `{}`。", first_line),
+                source_tool: capability,
+                sticky: true,
+            }];
+        }
+
+        if matches!(
+            command_trimmed,
+            "git branch --show-current" | "git rev-parse --abbrev-ref HEAD"
+        ) && !first_line.is_empty()
+        {
+            return vec![ExecutionFact {
+                key: "env.git.branch".into(),
+                summary: format!("已验证当前 Git 分支为 `{}`。", first_line),
+                source_tool: capability,
+                sticky: true,
+            }];
+        }
+
+        if command_trimmed == "git status --short" {
+            return vec![ExecutionFact {
+                key: "env.git.status.short".into(),
+                summary: if output.is_empty() {
+                    "已验证当前 Git 工作区没有短格式变更输出。".into()
+                } else {
+                    format!("已验证当前 Git 工作区状态摘要：{}", preview_text(output, 140))
+                },
+                source_tool: capability,
+                sticky: true,
+            }];
+        }
+    }
+
+    if capability == "read" && status == "success" {
+        let path = extract_named_arg(input, "path").unwrap_or_else(|| input.to_string());
+        return vec![ExecutionFact {
+            key: format!("fs.read.{}", path),
+            summary: format!(
+                "已成功读取文件 `{}`。内容摘要：{}",
+                path,
+                if output.is_empty() {
+                    "(空文件)".into()
+                } else {
+                    preview_text(output, 140)
+                }
+            ),
+            source_tool: capability,
+            sticky: true,
+        }];
+    }
+
+    if capability == "write" && status == "success" {
+        let path = extract_named_arg(input, "path").unwrap_or_else(|| input.to_string());
+        return vec![ExecutionFact {
+            key: format!("fs.write.{}", path),
+            summary: format!("已成功写入文件 `{}`。", path),
+            source_tool: capability,
+            sticky: true,
+        }];
+    }
+
+    if capability == "edit" && status == "success" {
+        let path = extract_named_arg(input, "file_path").unwrap_or_else(|| input.to_string());
+        return vec![ExecutionFact {
+            key: format!("fs.edit.{}", path),
+            summary: format!("已成功编辑文件 `{}`。", path),
+            source_tool: capability,
+            sticky: true,
+        }];
+    }
+
+    vec![ExecutionFact {
+        key: format!("{}::{}::{}", capability, status, input),
+        summary: render_execution_fact(execution),
+        source_tool: capability,
+        sticky: false,
+    }]
+}
+
+fn render_execution_fact(execution: &ExecutionRecord) -> String {
+    let input = preview_text(execution.input.trim(), 96);
+    match execution.status.as_str() {
+        "success" => {
+            let output = execution.output.as_deref().unwrap_or("").trim();
+            if output.is_empty() {
+                format!("`{}` 已成功执行：`{}`。", execution.capability, input)
+            } else {
+                format!(
+                    "`{}` 已成功执行：`{}`。结果摘要：{}",
+                    execution.capability,
+                    input,
+                    preview_text(output, 140)
+                )
+            }
+        }
+        "failed" => format!(
+            "`{}` 执行失败：`{}`。错误：{}",
+            execution.capability,
+            input,
+            preview_text(execution.error.as_deref().unwrap_or("未知错误"), 140)
+        ),
+        "denied" => format!(
+            "`{}` 被权限拦截：`{}`。原因：{}",
+            execution.capability,
+            input,
+            preview_text(execution.error.as_deref().unwrap_or("权限不足"), 140)
+        ),
+        "needs_confirm" => format!(
+            "`{}` 尚未真正执行：`{}`。当前状态是等待确认。",
+            execution.capability,
+            input
+        ),
+        other => format!(
+            "`{}` 最近状态为 `{}`：`{}`。",
+            execution.capability,
+            other,
+            input
+        ),
+    }
+}
+
+fn extract_named_arg(input: &str, key: &str) -> Option<String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(input).ok()?;
+    parsed
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 pub async fn delegate_to_agent(
@@ -639,6 +1028,7 @@ pub async fn delegate_to_agent(
                 "status": item.status,
                 "input": item.input,
                 "output": item.output,
+                "artifactPath": item.artifact_path,
                 "error": item.error,
                 "durationMs": item.duration_ms,
             })

@@ -39,9 +39,6 @@ pub fn execute(params: &serde_json::Value) -> Result<ExecOutput, String> {
         body
     };
 
-    // Truncate at 10k chars
-    let text = crate::tools::truncate(&text, 10_000);
-
     Ok(ExecOutput {
         output: Some(format!(
             "URL: {}\nStatus: {}\nContent-Type: {}\n\n{}",

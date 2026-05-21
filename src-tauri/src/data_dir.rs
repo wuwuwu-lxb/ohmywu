@@ -12,6 +12,7 @@ pub fn ensure_data_dirs() -> Result<PathBuf, String> {
         "runtime/turns",
         "runtime/events",
         "runtime/checklists",
+        "runtime/artifacts",
     ];
 
     for sub in &dirs {

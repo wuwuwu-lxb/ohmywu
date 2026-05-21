@@ -123,6 +123,123 @@ impl WikiEngine {
                 .map_err(|e| format!("write README.md: {}", e))?;
         }
 
+        let guide_note = self.root.join("notes").join("ohmywu-guide.md");
+        if !guide_note.exists() {
+            let content = r#"---
+title: OhMyWu 使用引导
+tags:
+  - guide
+  - onboarding
+  - product
+---
+
+## 项目定位
+
+OhMyWu 是一个本地优先的桌面 Agent 工作台，重点不是堆更多入口，而是把下面几件事做扎实：
+
+- 对话可持续
+- 工具调用可见
+- 执行权限可控
+- 知识可沉淀
+- Action / Skill / Agent 能继续扩展
+
+## 推荐起步顺序
+
+1. 先去模型设置配置至少一套可用模型。
+2. 再到设置里确认权限策略和 Agent Mode。
+3. 按任务类型切换或编辑 Agent。
+4. 需要长期记忆的内容，先写进知识库。
+5. 最后回到对话页实际运行任务，并检查 Runtime。
+
+## 页面说明
+
+### 对话
+
+- 发起任务、查看回复和工具执行过程
+- 每条回复下方都能展开 Runtime 和工具调用
+- 适合持续跟踪任务链路，而不是只看最终结果
+
+### Agent 管理
+
+- 管理多个 Agent 档案
+- 可编辑名称、角色、人格、记忆范围
+- 当前阶段以主 Agent 配置管理为主
+
+### 知识库
+
+- 管理长期有效的信息、偏好、规范和项目事实
+- 支持手动确认“记忆候选”后再写入
+- 图谱页可以查看笔记间链接关系
+
+### 模型设置
+
+- 管理多套模型配置
+- 支持手动填写 Provider / Endpoint / Model
+- 支持获取模型列表和测试连接
+- 支持切换当前启用模型
+
+### 原子化能力
+
+- 查看底层 capability 注册情况
+- 这里是 Action 和 Agent 真正调用的执行单元
+
+### Action 注册
+
+- 查看当前系统 Action
+- 兼容 `SKILL.md` 生态，支持 Skill 转 Action
+
+### 审计日志
+
+- 查看关键执行记录
+- 用于回溯权限决策和高风险动作
+
+## 权限模式
+
+### Policy Mode
+
+- `Sandbox`：更保守，非只读能力会更容易被挡下
+- `Danger`：允许进入执行阶段，再由规则和确认流程控制
+
+### Agent Mode
+
+- `plan`：偏分析，只暴露只读工具和 checklist
+- `agent`：完整工具集，高风险默认需要确认
+- `auto`：完整工具集，高风险可直接执行
+
+## 知识库建议
+
+- 把稳定事实写进知识库，不要把一次性上下文都塞进去
+- 优先记录项目规则、接口约束、运行习惯和常见故障
+- 记忆候选建议人工确认，避免错误内容沉淀
+
+## 常见排查
+
+### 拉不到模型列表
+
+- 检查 Endpoint 是否正确
+- 检查 API Key 是否有效
+- 检查 API Format 是否匹配
+
+### 工具没有执行
+
+- 检查设置里的权限策略
+- 看是否被 `Sandbox` 或 deny 规则挡住
+- 到 Runtime 和审计日志里看具体原因
+
+### 背景或主题不符合预期
+
+- 纯色模式下分别调整背景色和主题色
+- 图片模式下可重新提取背景主色
+- 模糊、遮罩、缩放建议配合一起调
+
+## 当前版本说明
+
+当前版本是 `v0.2.0` 预览版，已经能跑通核心链路，但仍以优化测试为主。
+"#;
+            fs::write(&guide_note, content)
+                .map_err(|e| format!("write guide note: {}", e))?;
+        }
+
         // ensure index.md
         self.rebuild_index()?;
 

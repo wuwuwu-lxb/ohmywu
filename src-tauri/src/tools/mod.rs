@@ -9,7 +9,9 @@ pub mod web_fetch;
 pub mod wiki;
 pub mod write;
 
-use std::time::{Duration, Instant};
+use std::fs;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use tokio::task;
@@ -41,6 +43,7 @@ pub struct ExecuteResult {
     pub capability: String,
     pub status: String,
     pub output: Option<String>,
+    pub artifact_path: Option<String>,
     pub error: Option<String>,
     pub task_id: String,
     pub duration_ms: u64,
@@ -403,6 +406,7 @@ pub async fn dispatch_tool(
                 capability: cap_name.clone(),
                 status: "not_found".into(),
                 output: None,
+                artifact_path: None,
                 error: Some(format!("Capability '{}' not registered", cap_name)),
                 task_id: String::new(),
                 duration_ms: 0,
@@ -421,6 +425,7 @@ pub async fn dispatch_tool(
             capability: cap_name,
             status: "denied".into(),
             output: None,
+            artifact_path: None,
             error: Some(format!("Tool is disabled in {:?} mode", agent_mode)),
             task_id: String::new(),
             duration_ms: 0,
@@ -443,6 +448,7 @@ pub async fn dispatch_tool(
             capability: cap_name,
             status: "denied".into(),
             output: None,
+            artifact_path: None,
             error: Some(format!("Policy denied in {:?} mode", decision.mode)),
             task_id: String::new(),
             duration_ms: 0,
@@ -476,6 +482,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "denied".into(),
                 output: None,
+                artifact_path: None,
                 error: Some(msg),
                 task_id: String::new(),
                 duration_ms: 0,
@@ -488,6 +495,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "needs_confirm".into(),
                 output: Some(msg),
+                artifact_path: None,
                 error: None,
                 task_id: String::new(),
                 duration_ms: 0,
@@ -565,7 +573,8 @@ pub async fn dispatch_tool(
     match exec_result {
         Ok(exec_out) => {
             let output_raw = exec_out.output.unwrap_or_default();
-            let output = Some(truncate(&output_raw, LARGE_RESULT_THRESHOLD));
+            let (output, artifact_path) =
+                finalize_tool_output(state, &cap_name, &cap.implementation, &task_id, &output_raw);
             let status = if exec_out.exit_code == 0 {
                 "success"
             } else {
@@ -585,6 +594,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: status.into(),
                 output,
+                artifact_path,
                 error: exec_out.stderr.filter(|s| !s.is_empty()),
                 task_id,
                 duration_ms,
@@ -605,6 +615,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "failed".into(),
                 output: None,
+                artifact_path: None,
                 error: Some(err_msg),
                 task_id,
                 duration_ms,
@@ -694,6 +705,7 @@ pub struct ExecOutput {
 }
 
 const LARGE_RESULT_THRESHOLD: usize = 10_000;
+const LARGE_RESULT_SUMMARY_LIMIT: usize = 1_800;
 
 pub fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
@@ -702,6 +714,86 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
         let truncated: String = s.chars().take(max_chars).collect();
         format!("{}\n... [truncated {} chars]",
             truncated, s.chars().count())
+    }
+}
+
+fn finalize_tool_output(
+    state: &AppState,
+    capability: &str,
+    implementation: &str,
+    task_id: &str,
+    output_raw: &str,
+) -> (Option<String>, Option<String>) {
+    if output_raw.is_empty() {
+        return (None, None);
+    }
+
+    if implementation == "agent_delegate" || output_raw.chars().count() <= LARGE_RESULT_THRESHOLD {
+        return (Some(output_raw.to_string()), None);
+    }
+
+    match persist_output_artifact(state, capability, task_id, output_raw) {
+        Ok(path) => {
+            let summary = format!(
+                "输出较长，完整结果已保存到本地 artifact：{}\n\n{}",
+                path.display(),
+                truncate(output_raw, LARGE_RESULT_SUMMARY_LIMIT)
+            );
+            (Some(summary), Some(path.display().to_string()))
+        }
+        Err(err) => {
+            let fallback = format!(
+                "{}\n\n[artifact 保存失败：{}]",
+                truncate(output_raw, LARGE_RESULT_THRESHOLD),
+                err
+            );
+            (Some(fallback), None)
+        }
+    }
+}
+
+fn persist_output_artifact(
+    state: &AppState,
+    capability: &str,
+    task_id: &str,
+    output_raw: &str,
+) -> Result<PathBuf, String> {
+    let dir = state.data_dir.join("runtime").join("artifacts");
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Create artifact dir {}: {}", dir.display(), e))?;
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|e| format!("Artifact timestamp: {}", e))?
+        .as_millis();
+    let filename = format!(
+        "{}-{}-{}.txt",
+        sanitize_artifact_segment(task_id),
+        sanitize_artifact_segment(capability),
+        timestamp
+    );
+    let path = dir.join(filename);
+    fs::write(&path, output_raw)
+        .map_err(|e| format!("Write artifact {}: {}", path.display(), e))?;
+    Ok(path)
+}
+
+fn sanitize_artifact_segment(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    let trimmed = sanitized.trim_matches('-');
+    if trimmed.is_empty() {
+        "artifact".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
