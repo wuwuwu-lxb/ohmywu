@@ -415,12 +415,14 @@ pub async fn agent_loop(
 
         // Process results in order
         for ((tc_id, capability, input), result) in exec_meta.iter().zip(results.iter()) {
+            let verification_hint = build_verification_hint(capability, input);
             let exec_record = ExecutionRecord {
                 capability: capability.clone(),
                 input: input.clone(),
                 output: result.output.clone(),
                 artifact_id: result.artifact_id.clone(),
                 artifact_path: result.artifact_path.clone(),
+                verification_hint: verification_hint.clone(),
                 error: result.error.clone(),
                 status: result.status.clone(),
                 duration_ms: result.duration_ms,
@@ -452,6 +454,7 @@ pub async fn agent_loop(
                         "outputPreview": preview_text(result.output.as_deref().unwrap_or(""), 512),
                         "artifactId": result.artifact_id,
                         "artifactPath": result.artifact_path,
+                        "verificationHint": verification_hint,
                         "errorPreview": result.error.as_deref().map(|s| preview_text(s, 256)),
                         "durationMs": result.duration_ms,
                         "taskId": result.task_id,
@@ -1303,6 +1306,7 @@ pub async fn delegate_to_agent(
                 "output": item.output,
                 "artifactId": item.artifact_id,
                 "artifactPath": item.artifact_path,
+                "verificationHint": item.verification_hint,
                 "error": item.error,
                 "durationMs": item.duration_ms,
             })

@@ -37,6 +37,8 @@ pub struct ExecutionRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     pub status: String,
     pub duration_ms: u64,

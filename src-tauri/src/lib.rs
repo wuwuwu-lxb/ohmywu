@@ -676,6 +676,7 @@ async fn process_message(
                 output: result.output.clone(),
                 artifact_id: result.artifact_id.clone(),
                 artifact_path: result.artifact_path.clone(),
+                verification_hint: None,
                 error: result.error.clone(),
                 status: result.status.clone(),
                 duration_ms: result.duration_ms,
@@ -703,6 +704,10 @@ async fn process_message(
                 output: result.output.clone(),
                 artifact_id: result.artifact_id.clone(),
                 artifact_path: result.artifact_path.clone(),
+                verification_hint: Some(
+                    "if the command changed files, git state, or environment assumptions, use a read-only tool to verify the specific side effect before making stronger claims"
+                        .to_string(),
+                ),
                 error: result.error.clone(),
                 status: result.status.clone(),
                 duration_ms: result.duration_ms,

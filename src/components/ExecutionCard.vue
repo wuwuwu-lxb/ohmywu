@@ -9,6 +9,7 @@ export interface ExecutionInfo {
   output?: string
   artifactId?: string
   artifactPath?: string
+  verificationHint?: string
   error?: string
   duration?: string
   delegated?: {
@@ -63,6 +64,10 @@ const executionStateText = computed(() => {
         <div class="exec-artifact-note">大结果已落到本地 artifact，后续可通过 artifact 引用继续读取。</div>
         <pre v-if="exec.artifactId" class="exec-code">artifact: {{ exec.artifactId }}</pre>
         <pre v-if="exec.artifactPath" class="exec-code exec-artifact-path">{{ exec.artifactPath }}</pre>
+      </div>
+      <div v-if="exec.verificationHint" class="exec-section verify">
+        <span class="exec-label">验证建议</span>
+        <pre class="exec-code">{{ exec.verificationHint }}</pre>
       </div>
       <div v-if="exec.error" class="exec-section error">
         <span class="exec-label">错误</span>
@@ -285,6 +290,10 @@ const executionStateText = computed(() => {
 
 .exec-section.error .exec-label {
   color: #ef4444;
+}
+
+.exec-section.verify .exec-label {
+  color: #38bdf8;
 }
 
 .exec-code {
