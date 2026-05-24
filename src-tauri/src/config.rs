@@ -54,6 +54,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub llm_profiles: Vec<LlmProfile>,
     #[serde(default)]
+    pub compression_llm_profile_id: Option<String>,
+    #[serde(default)]
     pub llm_provider: Option<LlmConfig>,
     #[serde(default)]
     pub permissions: PermissionConfig,
@@ -114,6 +116,7 @@ impl Default for AppConfig {
             agent_mode: default_agent_mode(),
             active_llm_profile_id: None,
             llm_profiles: Vec::new(),
+            compression_llm_profile_id: None,
             llm_provider: None,
             permissions: PermissionConfig::default(),
         }
@@ -147,6 +150,14 @@ impl AppConfig {
             .or_else(|| self.llm_provider.clone())
     }
 
+    pub fn compression_llm_config(&self) -> Option<LlmConfig> {
+        self
+            .compression_llm_profile_id
+            .as_deref()
+            .and_then(|profile_id| self.llm_config_by_id(profile_id))
+            .or_else(|| self.active_llm_config())
+    }
+
     pub fn normalized(mut self) -> Self {
         let migrating_legacy = self.llm_profiles.is_empty() && self.llm_provider.is_some();
         if migrating_legacy
@@ -170,6 +181,7 @@ impl AppConfig {
 
         if self.llm_profiles.is_empty() {
             self.active_llm_profile_id = None;
+            self.compression_llm_profile_id = None;
             self.llm_provider = None;
             return self;
         }
@@ -179,6 +191,11 @@ impl AppConfig {
             Some(_) => Some(self.llm_profiles[0].id.clone()),
             None if migrating_legacy => Some(self.llm_profiles[0].id.clone()),
             None => None,
+        };
+        self.compression_llm_profile_id = match self.compression_llm_profile_id.clone() {
+            Some(id) if self.llm_profiles.iter().any(|profile| profile.id == id) => Some(id),
+            Some(_) => self.active_llm_profile_id.clone(),
+            None => self.active_llm_profile_id.clone(),
         };
         self.llm_provider = self.active_llm_config();
         self

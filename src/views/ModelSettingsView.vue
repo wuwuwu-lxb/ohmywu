@@ -25,6 +25,7 @@ interface LlmModelOption {
 
 interface AppConfig {
   active_llm_profile_id?: string | null
+  compression_llm_profile_id?: string | null
   llm_profiles: LlmProfile[]
   llm_provider: LlmConfig | null
 }
@@ -41,6 +42,7 @@ const pageEl = ref<HTMLElement | null>(null)
 const llmEnabled = ref(false)
 const llmProfiles = ref<LlmProfile[]>([])
 const activeLlmProfileId = ref<string | null>(null)
+const compressionLlmProfileId = ref<string | null>(null)
 const editingLlmProfileId = ref("")
 const profileDraft = ref<LlmProfile | null>(null)
 const fetchedModels = ref<Record<string, LlmModelOption[]>>({})
@@ -60,7 +62,16 @@ const deleteProfileTarget = computed(() =>
 const activeProfile = computed(() =>
   llmProfiles.value.find((profile) => profile.id === activeLlmProfileId.value) || null
 )
+const compressionProfile = computed(() =>
+  llmProfiles.value.find((profile) => profile.id === compressionLlmProfileId.value) || null
+)
 const apiFormatOptions = computed(() => API_FORMAT_OPTIONS)
+const compressionProfileOptions = computed(() =>
+  llmProfiles.value.map((profile) => ({
+    label: `${profile.name || "未命名配置"} · ${profile.provider_type || "custom"} · ${profile.model || "未设置模型"}`,
+    value: profile.id,
+  }))
+)
 const selectedFetchedModelOptions = computed(() =>
   ((profileDraft.value && fetchedModels.value[profileDraft.value.id]) || []).map((item) => ({
     label: item.label,
@@ -248,6 +259,7 @@ async function loadSettings() {
   }))
   llmEnabled.value = !!cfg.active_llm_profile_id
   activeLlmProfileId.value = cfg.active_llm_profile_id || null
+  compressionLlmProfileId.value = cfg.compression_llm_profile_id || cfg.active_llm_profile_id || null
   editingLlmProfileId.value = cfg.active_llm_profile_id || llmProfiles.value[0]?.id || ""
   ensureEditingProfile()
   syncProfileDraft()
@@ -272,6 +284,11 @@ async function saveLlmConfig() {
         active_llm_profile_id: llmEnabled.value
           ? (activeLlmProfileId.value || editingLlmProfileId.value || profiles[0]?.id || null)
           : null,
+        compression_llm_profile_id: compressionLlmProfileId.value
+          || activeLlmProfileId.value
+          || editingLlmProfileId.value
+          || profiles[0]?.id
+          || null,
         llm_profiles: profiles,
         llm_provider: null,
       },
@@ -363,6 +380,9 @@ watch(
           {{ llmEnabled && activeProfile ? `当前模型：${activeProfile.name}` : "当前未启用模型" }}
         </span>
         <span class="status-chip subtle">{{ llmProfiles.length }} 条配置</span>
+        <span class="status-chip subtle">
+          {{ compressionProfile ? `压缩模型：${compressionProfile.name}` : "压缩模型跟随当前模型" }}
+        </span>
       </div>
 
       <div class="model-profile-actions">
@@ -433,6 +453,16 @@ watch(
             :model-value="profileDraft.model"
             :options="selectedFetchedModelOptions"
             @update:model-value="(value) => profileDraft && (profileDraft.model = String(value))"
+          />
+        </div>
+
+        <div v-if="llmProfiles.length" class="field-group">
+          <label class="field-label">压缩模型</label>
+          <ThemeSelect
+            class="form-input provider-select"
+            :model-value="compressionLlmProfileId || activeLlmProfileId || profileDraft.id"
+            :options="compressionProfileOptions"
+            @update:model-value="(value) => compressionLlmProfileId = String(value)"
           />
         </div>
 

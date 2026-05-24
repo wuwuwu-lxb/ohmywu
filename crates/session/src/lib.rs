@@ -25,6 +25,25 @@ pub struct SessionMessage {
     pub timestamp: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionCompactionBlock {
+    pub id: String,
+    pub session_id: String,
+    pub created_at: String,
+    pub source_start_index: usize,
+    pub source_end_index: usize,
+    pub message_count: usize,
+    pub approx_bytes_before: usize,
+    pub goal: String,
+    pub completed: Vec<String>,
+    pub pending: Vec<String>,
+    pub blockers: Vec<String>,
+    pub verified_facts: Vec<String>,
+    pub artifact_refs: Vec<String>,
+    pub user_constraints: Vec<String>,
+    pub summary_text: String,
+}
+
 /// Execution detail for a single capability invocation within a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionRecord {
@@ -89,6 +108,11 @@ impl SessionManager {
 
     fn meta_path(&self, session_id: &str) -> PathBuf {
         self.sessions_dir.join(format!("{}.meta.json", session_id))
+    }
+
+    fn compaction_path(&self, session_id: &str) -> PathBuf {
+        self.sessions_dir
+            .join(format!("{}.compactions.json", session_id))
     }
 
     // ── session CRUD ──────────────────────────────────────────────
@@ -165,6 +189,42 @@ impl SessionManager {
             messages.push(msg);
         }
         Ok(messages)
+    }
+
+    pub fn load_compactions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<SessionCompactionBlock>, String> {
+        let path = self.compaction_path(session_id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let content = fs::read_to_string(&path)
+            .map_err(|e| format!("Read compactions {}: {}", path.display(), e))?;
+        serde_json::from_str(&content).map_err(|e| format!("Parse compactions: {}", e))
+    }
+
+    pub fn append_compaction(
+        &self,
+        session_id: &str,
+        block: &SessionCompactionBlock,
+    ) -> Result<(), String> {
+        let _guard = self.write_lock.lock().map_err(|e| format!("Lock: {}", e))?;
+        let path = self.compaction_path(session_id);
+        let mut blocks = if path.exists() {
+            let content = fs::read_to_string(&path)
+                .map_err(|e| format!("Read compactions {}: {}", path.display(), e))?;
+            serde_json::from_str::<Vec<SessionCompactionBlock>>(&content)
+                .map_err(|e| format!("Parse compactions: {}", e))?
+        } else {
+            Vec::new()
+        };
+        blocks.push(block.clone());
+        let content = serde_json::to_string_pretty(&blocks)
+            .map_err(|e| format!("Serialize compactions: {}", e))?;
+        fs::write(&path, content)
+            .map_err(|e| format!("Write compactions {}: {}", path.display(), e))?;
+        Ok(())
     }
 
     pub fn session_exists(&self, session_id: &str) -> bool {

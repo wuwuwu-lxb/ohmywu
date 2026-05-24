@@ -121,6 +121,17 @@ const taskState = computed(() =>
     .find((event) => event.kind === "task.state.recalled")
 )
 
+const compactionRecalled = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "context.compaction.recalled")
+)
+
+const compactionCreated = computed(() =>
+  props.runtime.events
+    .filter((event) => event.kind === "context.compaction.created")
+)
+
 function sourceLabel(source: string) {
   switch (source) {
     case "system":
@@ -137,11 +148,21 @@ function sourceLabel(source: string) {
       return "task"
     case "execution_facts":
       return "facts"
+    case "compressed_history":
+      return "summary"
     case "artifacts":
       return "artifact"
     default:
       return source
   }
+}
+
+function eventPayloadList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      .map((item) => item.trim())
+    : []
 }
 
 const latestMemoryCandidate = computed(() =>
@@ -297,6 +318,88 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
             class="task-state-bullet"
           >
             {{ String(item) }}
+          </div>
+        </div>
+      </div>
+
+      <div v-if="compactionRecalled || compactionCreated.length" class="compaction-list">
+        <div class="runtime-section-title">历史压缩</div>
+
+        <div v-if="compactionRecalled" class="compaction-card">
+          <div class="compaction-top">
+            <span class="compaction-badge">已注入</span>
+            <span class="compaction-meta">
+              {{ Number(compactionRecalled.payload?.blockCount || 0) }} 个压缩块
+            </span>
+          </div>
+          <div
+            v-if="typeof compactionRecalled.payload?.preview === 'string' && compactionRecalled.payload.preview"
+            class="compaction-summary"
+          >
+            {{ String(compactionRecalled.payload.preview) }}
+          </div>
+        </div>
+
+        <div
+          v-for="(event, index) in compactionCreated"
+          :key="event.id || `compaction-${index}`"
+          class="compaction-card"
+        >
+          <div class="compaction-top">
+            <span class="compaction-badge created">新生成</span>
+            <span class="compaction-meta">
+              覆盖 {{ Number(event.payload?.sourceStartIndex || 0) }}..{{ Number(event.payload?.sourceEndIndex || 0) }}
+            </span>
+            <span class="compaction-meta">
+              {{ Number(event.payload?.messageCount || 0) }} 条消息
+            </span>
+          </div>
+          <div v-if="event.payload?.goal" class="compaction-line">
+            <span class="compaction-label">目标</span>
+            <span>{{ String(event.payload.goal) }}</span>
+          </div>
+          <div v-if="event.payload?.summaryText" class="compaction-summary">
+            {{ String(event.payload.summaryText) }}
+          </div>
+          <div v-if="eventPayloadList(event.payload?.completed).length" class="compaction-group">
+            <span class="compaction-label">已完成</span>
+            <div
+              v-for="(item, itemIndex) in eventPayloadList(event.payload?.completed)"
+              :key="`completed-${index}-${itemIndex}`"
+              class="compaction-bullet"
+            >
+              {{ item }}
+            </div>
+          </div>
+          <div v-if="eventPayloadList(event.payload?.pending).length" class="compaction-group">
+            <span class="compaction-label">待处理</span>
+            <div
+              v-for="(item, itemIndex) in eventPayloadList(event.payload?.pending)"
+              :key="`pending-${index}-${itemIndex}`"
+              class="compaction-bullet"
+            >
+              {{ item }}
+            </div>
+          </div>
+          <div v-if="eventPayloadList(event.payload?.blockers).length" class="compaction-group">
+            <span class="compaction-label">阻塞</span>
+            <div
+              v-for="(item, itemIndex) in eventPayloadList(event.payload?.blockers)"
+              :key="`blocker-${index}-${itemIndex}`"
+              class="compaction-bullet"
+            >
+              {{ item }}
+            </div>
+          </div>
+          <div v-if="eventPayloadList(event.payload?.artifactRefs).length" class="compaction-group">
+            <span class="compaction-label">artifact</span>
+            <div
+              v-for="(item, itemIndex) in eventPayloadList(event.payload?.artifactRefs)"
+              :key="`artifact-${index}-${itemIndex}`"
+              class="compaction-bullet mono"
+            >
+              {{ item }}
+            </div>
           </div>
         </div>
       </div>
@@ -516,12 +619,14 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
 }
 
 .context-card,
+.compaction-list,
 .fact-list,
 .memory-recall-list {
   margin-top: 10px;
 }
 
 .context-card,
+.compaction-card,
 .task-state-card,
 .fact-card,
 .memory-recall-card,
@@ -535,6 +640,8 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
 
 .task-state-line,
 .context-line,
+.compaction-top,
+.compaction-line,
 .fact-top,
 .memory-recall-top,
 .memory-runtime-line {
@@ -567,6 +674,7 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
 }
 
 .context-label,
+.compaction-label,
 .task-state-label,
 .fact-summary,
 .memory-title-line {
@@ -575,10 +683,47 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
 }
 
 .context-label,
+.compaction-label,
 .task-state-label {
   min-width: 68px;
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.compaction-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  color: var(--text-primary);
+}
+
+.compaction-badge.created {
+  background: rgba(var(--accent-rgb), 0.18);
+}
+
+.compaction-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.compaction-summary,
+.compaction-bullet {
+  margin-top: 8px;
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.compaction-group {
+  margin-top: 8px;
+}
+
+.compaction-bullet.mono {
+  font-family: var(--font-mono);
 }
 
 .context-pill-row {

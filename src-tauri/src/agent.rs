@@ -5,7 +5,7 @@ use std::time::Instant;
 use ohmywu_domain::{chrono_now, AgentMode};
 use ohmywu_llm_adapter::types::{ChatMessage, ChatResponse, ChatStreamChunk, ToolCall, ToolDef};
 use ohmywu_llm_adapter::{create_provider, LlmConfig, LlmError, LlmProvider};
-use ohmywu_session::{ExecutionRecord, SessionMessage};
+use ohmywu_session::{ExecutionRecord, SessionCompactionBlock, SessionMessage};
 use ohmywu_wiki::RecallHit;
 use tauri::Emitter;
 
@@ -75,6 +75,9 @@ const SYSTEM_PROMPT: &str = "\
 ";
 
 const MAX_ITERATIONS: usize = 48;
+const COMPACTION_TRIGGER_MESSAGE_COUNT: usize = 24;
+const COMPACTION_TRIGGER_CONTEXT_BYTES: usize = 32_000;
+const RECENT_MESSAGE_WINDOW: usize = 8;
 
 pub struct AgentResponse {
     pub content: String,
@@ -126,6 +129,14 @@ struct ExecutionFact {
     sticky: bool,
 }
 
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CompressionContext {
+    block_count: usize,
+    latest: Option<SessionCompactionBlock>,
+    text: String,
+}
+
 /// Run the agent conversation loop.
 /// If `app_handle` is provided, streams content deltas via "chat-stream" events.
 pub async fn agent_loop(
@@ -141,6 +152,8 @@ pub async fn agent_loop(
     let provider = create_provider(llm_config)?;
     let turn_started = Instant::now();
     let history = state.session.load_session(session_id).unwrap_or_default();
+    maybe_compact_session_history(state, session_id, turn_id, &history).await;
+    let compactions = state.session.load_compactions(session_id).unwrap_or_default();
 
     // Step 1: Health check — fast fail if unreachable
     provider.health_check().await?;
@@ -154,10 +167,11 @@ pub async fn agent_loop(
     let memory_context = build_memory_context(state, agent_profile, user_message);
     let task_state_context = build_task_state_context(&history, turn_id);
     let execution_context = build_execution_context(&history);
+    let compression_context = build_compression_context(&compactions);
     let history_window = history
         .iter()
         .rev()
-        .take(20)
+        .take(RECENT_MESSAGE_WINDOW)
         .rev()
         .cloned()
         .collect::<Vec<_>>();
@@ -215,6 +229,23 @@ pub async fn agent_loop(
         let _ = handle.emit("runtime-event", &event);
     }
 
+    if let Some(handle) = app_handle
+        && let Some(compression) = &compression_context
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "context.compaction.recalled",
+            &format!("注入 {} 个历史压缩块", compression.block_count),
+            serde_json::json!({
+                "blockCount": compression.block_count,
+                "latest": compression.latest,
+                "preview": compression.text,
+            }),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
+
     // build initial messages
     let mut messages: Vec<ChatMessage> = Vec::new();
     messages.push(ChatMessage::system(&build_system_prompt(
@@ -223,6 +254,7 @@ pub async fn agent_loop(
         memory_context.as_ref(),
         task_state_context.as_ref(),
         execution_context.as_ref(),
+        compression_context.as_ref(),
     )));
 
     // include recent session history (last 20 messages)
@@ -250,6 +282,7 @@ pub async fn agent_loop(
                 memory_context.as_ref(),
                 task_state_context.as_ref(),
                 execution_context.as_ref(),
+                compression_context.as_ref(),
                 tools.len(),
                 approx_context_bytes(&messages, &tools),
             ))
@@ -595,6 +628,7 @@ fn build_system_prompt(
     memory_context: Option<&MemoryContext>,
     task_state_context: Option<&TaskStateContext>,
     execution_context: Option<&ExecutionContext>,
+    compression_context: Option<&CompressionContext>,
 ) -> String {
     let agent_mode = state
         .config
@@ -642,8 +676,14 @@ fn build_system_prompt(
             execution.text
         )
     });
+    let compression_note = compression_context.map(|compression| {
+        format!(
+            "## 历史压缩摘要\n{}\n\n这些块是更老对话的结构化压缩摘要。优先把它们当成历史背景，不要要求它们替代最近消息里的精确细节。",
+            compression.text
+        )
+    });
 
-    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note, task_state_note, execution_note]
+    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note, task_state_note, execution_note, compression_note]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -677,6 +717,7 @@ fn build_context_prepared(
     memory_context: Option<&MemoryContext>,
     task_state_context: Option<&TaskStateContext>,
     execution_context: Option<&ExecutionContext>,
+    compression_context: Option<&CompressionContext>,
     tool_count: usize,
     approx_context_bytes: usize,
 ) -> ContextPrepared {
@@ -719,6 +760,9 @@ fn build_context_prepared(
     if execution_fact_count > 0 {
         sources.push("execution_facts".to_string());
     }
+    if compression_context.is_some_and(|context| context.block_count > 0) {
+        sources.push("compressed_history".to_string());
+    }
     if artifact_reference_count > 0 {
         sources.push("artifacts".to_string());
     }
@@ -736,6 +780,219 @@ fn build_context_prepared(
         tool_count,
         approx_context_bytes,
         sources,
+    }
+}
+
+fn build_compression_context(blocks: &[SessionCompactionBlock]) -> Option<CompressionContext> {
+    if blocks.is_empty() {
+        return None;
+    }
+    let latest = blocks.last().cloned();
+    let text = blocks
+        .iter()
+        .rev()
+        .take(3)
+        .rev()
+        .enumerate()
+        .map(|(index, block)| {
+            format!(
+                "### 压缩块 {}\n- 时间：{}\n- 覆盖消息：{}..{}\n- 目标：{}\n- 已完成：{}\n- 待处理：{}\n- 阻塞：{}\n- 已验证事实：{}\n- artifact：{}\n- 约束：{}\n- 摘要：{}",
+                index + 1,
+                block.created_at,
+                block.source_start_index,
+                block.source_end_index,
+                block.goal,
+                join_or_none(&block.completed),
+                join_or_none(&block.pending),
+                join_or_none(&block.blockers),
+                join_or_none(&block.verified_facts),
+                join_or_none(&block.artifact_refs),
+                join_or_none(&block.user_constraints),
+                block.summary_text,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Some(CompressionContext {
+        block_count: blocks.len(),
+        latest,
+        text,
+    })
+}
+
+async fn maybe_compact_session_history(
+    state: &AppState,
+    session_id: &str,
+    turn_id: &str,
+    history: &[SessionMessage],
+) {
+    let total_bytes = history
+        .iter()
+        .map(|msg| msg.content.len() + msg.reasoning_content.as_deref().map(|text| text.len()).unwrap_or(0))
+        .sum::<usize>();
+    let should_compact = history.len() >= COMPACTION_TRIGGER_MESSAGE_COUNT
+        || total_bytes >= COMPACTION_TRIGGER_CONTEXT_BYTES;
+    if !should_compact || history.len() <= RECENT_MESSAGE_WINDOW {
+        return;
+    }
+
+    let existing = match state.session.load_compactions(session_id) {
+        Ok(blocks) => blocks,
+        Err(_) => return,
+    };
+    let covered_until = existing
+        .last()
+        .map(|block| block.source_end_index.saturating_add(1))
+        .unwrap_or(0);
+    let compact_until = history.len().saturating_sub(RECENT_MESSAGE_WINDOW);
+    if compact_until <= covered_until {
+        return;
+    }
+
+    let slice = &history[covered_until..compact_until];
+    let approx_bytes_before = slice.iter().map(|msg| msg.content.len()).sum::<usize>();
+    let Some(block) = summarize_compaction_slice(
+        state,
+        session_id,
+        covered_until,
+        compact_until.saturating_sub(1),
+        approx_bytes_before,
+        slice,
+    )
+    .await else {
+        return;
+    };
+
+    let _ = state.session.append_compaction(session_id, &block);
+    if let Some(handle) = state.get_app_handle() {
+        if let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "context.compaction.created",
+            &format!("生成历史压缩块，覆盖 {} 条消息", block.message_count),
+            serde_json::to_value(&block).unwrap_or_else(|_| serde_json::json!({})),
+        ) {
+            let _ = handle.emit("runtime-event", &event);
+        }
+    }
+}
+
+async fn summarize_compaction_slice(
+    state: &AppState,
+    session_id: &str,
+    start_index: usize,
+    end_index: usize,
+    approx_bytes_before: usize,
+    slice: &[SessionMessage],
+) -> Option<SessionCompactionBlock> {
+    let llm_config = state
+        .config
+        .read()
+        .ok()
+        .and_then(|cfg| cfg.compression_llm_config())?;
+    let provider = create_provider(&llm_config).ok()?;
+
+    let source = slice
+        .iter()
+        .enumerate()
+        .map(|(offset, msg)| {
+            format!(
+                "[{}] role={}; turn={}; content={}",
+                start_index + offset,
+                msg.role,
+                msg.turn_id.as_deref().unwrap_or("-"),
+                clip_text_middle(&msg.content, 1000)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let prompt = format!(
+        "请压缩下面一段旧对话历史，输出严格 JSON，不要 Markdown，不要解释。\n\
+JSON 结构必须是：{{\
+\"goal\":\"...\",\
+\"completed\":[\"...\"],\
+\"pending\":[\"...\"],\
+\"blockers\":[\"...\"],\
+\"verified_facts\":[\"...\"],\
+\"artifact_refs\":[\"...\"],\
+\"user_constraints\":[\"...\"],\
+\"summary_text\":\"...\"\
+}}\n\
+要求：\n\
+1. 用中文。\n\
+2. 保留任务延续所需的状态，不要保留寒暄。\n\
+3. completed/pending/blockers/verified_facts/artifact_refs/user_constraints 各最多 6 条。\n\
+4. artifact_refs 只写真正关键的 artifact id 或路径引用。\n\
+5. verified_facts 只写已经被真实工具结果验证过的事实。\n\
+6. summary_text 写成紧凑段落，便于后续系统提示拼接。\n\n\
+[session]\n{}\n\n[history]\n{}",
+        session_id,
+        source
+    );
+
+    let response = provider
+        .chat(
+            &[
+                ChatMessage::system(
+                    "你是一个对话历史压缩器。你的唯一任务是把旧消息压缩成结构化状态块。输出必须是可被 JSON.parse 的纯 JSON。",
+                ),
+                ChatMessage::user(&prompt),
+            ],
+            &[],
+        )
+        .await
+        .ok()?;
+    let raw = response.content.unwrap_or_default();
+    let json = extract_json_object(&raw)?;
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+
+    let list = |key: &str| -> Vec<String> {
+        value
+            .get(key)
+            .and_then(|item| item.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .map(|item| item.trim().to_string())
+                    .filter(|item| !item.is_empty())
+                    .take(6)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    Some(SessionCompactionBlock {
+        id: format!("compact-{}-{}", session_id, chrono_now().replace([':', '.'], "-")),
+        session_id: session_id.to_string(),
+        created_at: chrono_now(),
+        source_start_index: start_index,
+        source_end_index: end_index,
+        message_count: slice.len(),
+        approx_bytes_before,
+        goal: value.get("goal").and_then(|item| item.as_str()).unwrap_or("").trim().to_string(),
+        completed: list("completed"),
+        pending: list("pending"),
+        blockers: list("blockers"),
+        verified_facts: list("verified_facts"),
+        artifact_refs: list("artifact_refs"),
+        user_constraints: list("user_constraints"),
+        summary_text: value
+            .get("summary_text")
+            .and_then(|item| item.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+    })
+}
+
+fn join_or_none(items: &[String]) -> String {
+    if items.is_empty() {
+        "无".into()
+    } else {
+        items.join("；")
     }
 }
 
