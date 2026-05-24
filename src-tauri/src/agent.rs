@@ -69,6 +69,9 @@ const SYSTEM_PROMPT: &str = "\
 4. 你直接跑在用户的电脑上，拥有本地执行能力。
 5. 如果任务适合拆分，可以先用 `agent_list` 了解可用 Agent，再用 `agent_delegate` 委派边界清晰的子任务。
 6. 如果用户明确要求新增或调整长期角色，可以用 `agent_register` 注册或更新 Agent。
+7. 工具摘要不等于完整结果。只要看到 `artifact_id` 或 `artifact_path`，就代表当前只拿到了摘要入口，不代表你已经知道完整输出。
+8. 当任务依赖完整输出、后续片段、精确比对、逐段分析时，优先调用 `artifact_read`，不要基于摘要猜测完整内容。
+9. 对可能改变真实环境的操作，优先区分“执行”和“验证”两步。写入后用只读工具复核，避免把预期结果当成已验证事实。
 ";
 
 const MAX_ITERATIONS: usize = 48;
@@ -632,7 +635,7 @@ fn build_system_prompt(
     });
     let execution_note = execution_context.map(|execution| {
         format!(
-            "## 最近已验证执行事实\n{}\n\n这些事实来自最近真实工具执行结果。除非有新的工具结果推翻它们，否则不要忽略、改写或凭空假设不同状态。",
+            "## 最近已验证执行事实\n{}\n\n这些事实来自最近真实工具执行结果。除非有新的工具结果推翻它们，否则不要忽略、改写或凭空假设不同状态。若某条事实附带 artifact 引用，说明你仍可继续调用 `artifact_read` 查看完整结果，而不应只依赖摘要。",
             execution.text
         )
     });
@@ -1098,7 +1101,7 @@ fn build_tool_receipt(
     }
     if let Some(path) = result.artifact_path.as_deref() {
         lines.push(format!("artifact_path: {}", path));
-        lines.push("artifact_hint: read this path if full output is needed later".to_string());
+        lines.push("artifact_hint: if you need the full output, later chunks, or exact details, call artifact_read instead of guessing from the summary".to_string());
     }
 
     match result.status.as_str() {
@@ -1107,6 +1110,15 @@ fn build_tool_receipt(
                 "output_summary: {}",
                 preview_text(result.output.as_deref().unwrap_or("(empty)"), 480)
             ));
+            if result.artifact_id.is_some() || result.artifact_path.is_some() {
+                lines.push(
+                    "rule: this success summary is not the full output. If the next step depends on exact lines, exact ordering, omitted sections, or complete content, call artifact_read first."
+                        .to_string(),
+                );
+            }
+            if let Some(verification_hint) = build_verification_hint(capability, input) {
+                lines.push(format!("verification_hint: {}", verification_hint));
+            }
             lines.push(
                 "rule: treat this result as verified real execution. Reuse it unless a newer tool result contradicts it."
                     .to_string(),
@@ -1158,6 +1170,30 @@ fn build_tool_receipt(
     }
 
     lines.join("\n")
+}
+
+fn build_verification_hint(capability: &str, input: &str) -> Option<String> {
+    match capability {
+        "write" => {
+            let path = extract_named_arg(input, "path")?;
+            Some(format!(
+                "if the next step depends on the file contents, read `{}` before claiming the final state",
+                path
+            ))
+        }
+        "edit" => {
+            let path = extract_named_arg(input, "file_path")?;
+            Some(format!(
+                "if the next step depends on the patch result, read `{}` before claiming the final state",
+                path
+            ))
+        }
+        "bash" => Some(
+            "if the command changed files, git state, or environment assumptions, use a read-only tool to verify the specific side effect before making stronger claims"
+                .to_string(),
+        ),
+        _ => None,
+    }
 }
 
 fn extract_named_arg(input: &str, key: &str) -> Option<String> {
