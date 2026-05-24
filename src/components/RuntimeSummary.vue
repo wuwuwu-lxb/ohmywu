@@ -4,6 +4,8 @@ import ExecutionCard from "./ExecutionCard.vue"
 import type { RuntimeTurnView } from "../stores/chat"
 
 const expandedState = new Map<string, boolean>()
+const contextExpandedState = new Map<string, boolean>()
+const toolExpandedState = new Map<string, boolean>()
 
 const props = defineProps<{
   runtime: RuntimeTurnView
@@ -11,6 +13,12 @@ const props = defineProps<{
 
 const expanded = ref(
   expandedState.get(props.runtime.turn.id) ?? props.runtime.turn.status === "running"
+)
+const contextExpanded = ref(
+  contextExpandedState.get(props.runtime.turn.id) ?? false
+)
+const toolExpanded = ref(
+  toolExpandedState.get(props.runtime.turn.id) ?? true
 )
 
 const toolCount = computed(() =>
@@ -177,6 +185,21 @@ const latestMemorySaved = computed(() =>
     .find((event) => event.kind === "memory.saved")
 )
 
+const hasContextSection = computed(() =>
+  !!contextPrepared.value
+  || !!taskState.value
+  || !!compactionRecalled.value
+  || compactionCreated.value.length > 0
+  || executionFacts.value.length > 0
+  || memoryRecalls.value.length > 0
+  || !!latestMemoryCandidate.value
+  || !!latestMemorySaved.value
+)
+
+const hasToolSection = computed(() =>
+  props.runtime.tools.length > 0 || props.runtime.delegatedTurns.length > 0
+)
+
 function runtimeStatusLabel(status: string) {
   switch (status) {
     case "completed":
@@ -228,260 +251,306 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
     </button>
 
     <div v-if="expanded" class="runtime-body">
-      <div v-if="contextPrepared" class="context-card">
-        <div class="runtime-section-title">上下文来源</div>
-        <div class="context-line">
-          <span class="context-label">组成</span>
-          <div class="context-pill-row">
+      <div v-if="hasContextSection" class="runtime-block">
+        <button
+          class="runtime-subtoggle"
+          @click="
+            contextExpanded = !contextExpanded;
+            contextExpandedState.set(runtime.turn.id, contextExpanded)
+          "
+        >
+          <div class="runtime-subcopy">
+            <span class="runtime-section-title">上下文</span>
             <span
-              v-for="source in Array.isArray(contextPrepared.payload?.sources) ? contextPrepared.payload.sources : []"
-              :key="String(source)"
-              class="context-pill"
+              v-if="contextPrepared"
+              class="runtime-meta"
             >
-              {{ sourceLabel(String(source)) }}
+              {{ Number(contextPrepared.payload?.historyMessages || 0) }} history ·
+              {{ Number(contextPrepared.payload?.memoryHitCount || 0) }} memory ·
+              {{ Number(contextPrepared.payload?.executionFactCount || 0) }} facts
             </span>
           </div>
-        </div>
-        <div class="context-line">
-          <span class="context-label">历史</span>
-          <span>
-            {{ Number(contextPrepared.payload?.historyMessages || 0) }} 条消息 /
-            {{ Number(contextPrepared.payload?.historyTurns || 0) }} 个回合
-          </span>
-        </div>
-        <div class="context-line">
-          <span class="context-label">记忆</span>
-          <span>{{ Number(contextPrepared.payload?.memoryHitCount || 0) }} 条</span>
-        </div>
-        <div class="context-line">
-          <span class="context-label">事实</span>
-          <span>
-            {{ Number(contextPrepared.payload?.executionFactCount || 0) }} 条
-            <template v-if="Number(contextPrepared.payload?.stickyExecutionFactCount || 0)">
-              · {{ Number(contextPrepared.payload?.stickyExecutionFactCount || 0) }} 条 sticky
-            </template>
-          </span>
-        </div>
-        <div class="context-line">
-          <span class="context-label">artifact</span>
-          <span>{{ Number(contextPrepared.payload?.artifactReferenceCount || 0) }} 个引用</span>
-        </div>
-        <div class="context-line">
-          <span class="context-label">任务状态</span>
-          <span>
-            已完成 {{ Number(contextPrepared.payload?.taskCompletedCount || 0) }}
-            · 待确认 {{ Number(contextPrepared.payload?.taskPendingConfirmationCount || 0) }}
-            · 阻塞 {{ Number(contextPrepared.payload?.taskBlockerCount || 0) }}
-          </span>
-        </div>
-        <div class="context-line">
-          <span class="context-label">体积</span>
-          <span>{{ Number(contextPrepared.payload?.approxContextBytes || 0) }} bytes · {{ Number(contextPrepared.payload?.toolCount || 0) }} 个工具定义</span>
-        </div>
-      </div>
+          <span class="runtime-chevron">{{ contextExpanded ? "▾" : "▸" }}</span>
+        </button>
 
-      <div v-if="taskState" class="task-state-card">
-        <div class="runtime-section-title">任务状态</div>
-        <div v-if="taskState.payload?.lastUserGoal" class="task-state-line">
-          <span class="task-state-label">最近目标</span>
-          <span>{{ String(taskState.payload.lastUserGoal) }}</span>
-        </div>
-        <div v-if="taskState.payload?.lastAgentSummary" class="task-state-line">
-          <span class="task-state-label">最近回复</span>
-          <span>{{ String(taskState.payload.lastAgentSummary) }}</span>
-        </div>
-        <div v-if="Array.isArray(taskState.payload?.completed) && taskState.payload.completed.length" class="task-state-group">
-          <span class="task-state-label">已完成</span>
-          <div
-            v-for="(item, index) in taskState.payload.completed"
-            :key="`completed-${index}`"
-            class="task-state-bullet"
-          >
-            {{ String(item) }}
-          </div>
-        </div>
-        <div v-if="Array.isArray(taskState.payload?.pendingConfirmation) && taskState.payload.pendingConfirmation.length" class="task-state-group">
-          <span class="task-state-label">待确认</span>
-          <div
-            v-for="(item, index) in taskState.payload.pendingConfirmation"
-            :key="`pending-${index}`"
-            class="task-state-bullet"
-          >
-            {{ String(item) }}
-          </div>
-        </div>
-        <div v-if="Array.isArray(taskState.payload?.blockers) && taskState.payload.blockers.length" class="task-state-group">
-          <span class="task-state-label">当前阻塞</span>
-          <div
-            v-for="(item, index) in taskState.payload.blockers"
-            :key="`blocker-${index}`"
-            class="task-state-bullet"
-          >
-            {{ String(item) }}
-          </div>
-        </div>
-      </div>
-
-      <div v-if="compactionRecalled || compactionCreated.length" class="compaction-list">
-        <div class="runtime-section-title">历史压缩</div>
-
-        <div v-if="compactionRecalled" class="compaction-card">
-          <div class="compaction-top">
-            <span class="compaction-badge">已注入</span>
-            <span class="compaction-meta">
-              {{ Number(compactionRecalled.payload?.blockCount || 0) }} 个压缩块
-            </span>
-          </div>
-          <div
-            v-if="typeof compactionRecalled.payload?.preview === 'string' && compactionRecalled.payload.preview"
-            class="compaction-summary"
-          >
-            {{ String(compactionRecalled.payload.preview) }}
-          </div>
-        </div>
-
-        <div
-          v-for="(event, index) in compactionCreated"
-          :key="event.id || `compaction-${index}`"
-          class="compaction-card"
-        >
-          <div class="compaction-top">
-            <span class="compaction-badge created">新生成</span>
-            <span class="compaction-meta">
-              覆盖 {{ Number(event.payload?.sourceStartIndex || 0) }}..{{ Number(event.payload?.sourceEndIndex || 0) }}
-            </span>
-            <span class="compaction-meta">
-              {{ Number(event.payload?.messageCount || 0) }} 条消息
-            </span>
-          </div>
-          <div v-if="event.payload?.goal" class="compaction-line">
-            <span class="compaction-label">目标</span>
-            <span>{{ String(event.payload.goal) }}</span>
-          </div>
-          <div v-if="event.payload?.summaryText" class="compaction-summary">
-            {{ String(event.payload.summaryText) }}
-          </div>
-          <div v-if="eventPayloadList(event.payload?.completed).length" class="compaction-group">
-            <span class="compaction-label">已完成</span>
-            <div
-              v-for="(item, itemIndex) in eventPayloadList(event.payload?.completed)"
-              :key="`completed-${index}-${itemIndex}`"
-              class="compaction-bullet"
-            >
-              {{ item }}
+        <div v-if="contextExpanded" class="runtime-subbody">
+          <div v-if="contextPrepared" class="context-card">
+            <div class="runtime-section-title">上下文来源</div>
+            <div class="context-line">
+              <span class="context-label">组成</span>
+              <div class="context-pill-row">
+                <span
+                  v-for="source in Array.isArray(contextPrepared.payload?.sources) ? contextPrepared.payload.sources : []"
+                  :key="String(source)"
+                  class="context-pill"
+                >
+                  {{ sourceLabel(String(source)) }}
+                </span>
+              </div>
             </div>
-          </div>
-          <div v-if="eventPayloadList(event.payload?.pending).length" class="compaction-group">
-            <span class="compaction-label">待处理</span>
-            <div
-              v-for="(item, itemIndex) in eventPayloadList(event.payload?.pending)"
-              :key="`pending-${index}-${itemIndex}`"
-              class="compaction-bullet"
-            >
-              {{ item }}
-            </div>
-          </div>
-          <div v-if="eventPayloadList(event.payload?.blockers).length" class="compaction-group">
-            <span class="compaction-label">阻塞</span>
-            <div
-              v-for="(item, itemIndex) in eventPayloadList(event.payload?.blockers)"
-              :key="`blocker-${index}-${itemIndex}`"
-              class="compaction-bullet"
-            >
-              {{ item }}
-            </div>
-          </div>
-          <div v-if="eventPayloadList(event.payload?.artifactRefs).length" class="compaction-group">
-            <span class="compaction-label">artifact</span>
-            <div
-              v-for="(item, itemIndex) in eventPayloadList(event.payload?.artifactRefs)"
-              :key="`artifact-${index}-${itemIndex}`"
-              class="compaction-bullet mono"
-            >
-              {{ item }}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div v-if="executionFacts.length" class="fact-list">
-        <div class="runtime-section-title">已验证事实</div>
-        <div
-          v-for="fact in executionFacts"
-          :key="`${runtime.turn.id}-${fact.key}`"
-          class="fact-card"
-        >
-          <div class="fact-top">
-            <span class="fact-tool">{{ fact.sourceTool }}</span>
-            <span v-if="fact.sticky" class="fact-badge">sticky</span>
-          </div>
-          <div class="fact-summary">{{ fact.summary }}</div>
-        </div>
-      </div>
-
-      <div v-if="memoryRecalls.length" class="memory-recall-list">
-        <div class="runtime-section-title">记忆召回</div>
-        <div
-          v-for="memory in memoryRecalls"
-          :key="`${runtime.turn.id}-${memory.slug}-${memory.title}`"
-          class="memory-recall-card"
-        >
-          <div class="memory-recall-top">
-            <span class="memory-folder">{{ memory.folder }}</span>
-            <span class="memory-title-line">{{ memory.title }}</span>
-          </div>
-          <div class="memory-snippet">{{ memory.snippet }}</div>
-        </div>
-      </div>
-
-      <div v-if="latestMemoryCandidate || latestMemorySaved" class="memory-runtime-meta">
-        <div v-if="latestMemoryCandidate" class="memory-runtime-line">
-          <span class="runtime-section-title inline">记忆候选</span>
-          <span>{{ latestMemoryCandidate.summary }}</span>
-        </div>
-        <div v-if="latestMemorySaved" class="memory-runtime-line">
-          <span class="runtime-section-title inline">知识库写入</span>
-          <span>{{ latestMemorySaved.summary }}</span>
-        </div>
-      </div>
-
-      <div v-if="runtime.delegatedTurns.length" class="delegate-turn-list">
-        <div class="runtime-section-title">子 Agent</div>
-        <div
-          v-for="child in runtime.delegatedTurns"
-          :key="child.turn.id"
-          class="delegate-turn-card"
-        >
-          <div class="delegate-turn-head">
-            <div class="delegate-turn-main">
-              <span class="delegate-turn-name">{{ child.turn.agentName || "子 Agent" }}</span>
-              <span class="delegate-turn-status">{{ runtimeStatusLabel(child.turn.status) }}</span>
-              <span v-if="runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt)" class="delegate-turn-meta">
-                {{ runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt) }}
+            <div class="context-line">
+              <span class="context-label">历史</span>
+              <span>
+                {{ Number(contextPrepared.payload?.historyMessages || 0) }} 条消息 /
+                {{ Number(contextPrepared.payload?.historyTurns || 0) }} 个回合
               </span>
             </div>
-            <div class="delegate-turn-task">{{ child.turn.userContent }}</div>
+            <div class="context-line">
+              <span class="context-label">记忆</span>
+              <span>{{ Number(contextPrepared.payload?.memoryHitCount || 0) }} 条</span>
+            </div>
+            <div class="context-line">
+              <span class="context-label">事实</span>
+              <span>
+                {{ Number(contextPrepared.payload?.executionFactCount || 0) }} 条
+                <template v-if="Number(contextPrepared.payload?.stickyExecutionFactCount || 0)">
+                  · {{ Number(contextPrepared.payload?.stickyExecutionFactCount || 0) }} 条 sticky
+                </template>
+              </span>
+            </div>
+            <div class="context-line">
+              <span class="context-label">artifact</span>
+              <span>{{ Number(contextPrepared.payload?.artifactReferenceCount || 0) }} 个引用</span>
+            </div>
+            <div class="context-line">
+              <span class="context-label">任务状态</span>
+              <span>
+                已完成 {{ Number(contextPrepared.payload?.taskCompletedCount || 0) }}
+                · 待确认 {{ Number(contextPrepared.payload?.taskPendingConfirmationCount || 0) }}
+                · 阻塞 {{ Number(contextPrepared.payload?.taskBlockerCount || 0) }}
+              </span>
+            </div>
+            <div class="context-line">
+              <span class="context-label">体积</span>
+              <span>{{ Number(contextPrepared.payload?.approxContextBytes || 0) }} bytes · {{ Number(contextPrepared.payload?.toolCount || 0) }} 个工具定义</span>
+            </div>
           </div>
 
-          <div v-if="child.tools.length" class="delegate-turn-tools">
+          <div v-if="taskState" class="task-state-card">
+            <div class="runtime-section-title">任务状态</div>
+            <div v-if="taskState.payload?.lastUserGoal" class="task-state-line">
+              <span class="task-state-label">最近目标</span>
+              <span>{{ String(taskState.payload.lastUserGoal) }}</span>
+            </div>
+            <div v-if="taskState.payload?.lastAgentSummary" class="task-state-line">
+              <span class="task-state-label">最近回复</span>
+              <span>{{ String(taskState.payload.lastAgentSummary) }}</span>
+            </div>
+            <div v-if="Array.isArray(taskState.payload?.completed) && taskState.payload.completed.length" class="task-state-group">
+              <span class="task-state-label">已完成</span>
+              <div
+                v-for="(item, index) in taskState.payload.completed"
+                :key="`completed-${index}`"
+                class="task-state-bullet"
+              >
+                {{ String(item) }}
+              </div>
+            </div>
+            <div v-if="Array.isArray(taskState.payload?.pendingConfirmation) && taskState.payload.pendingConfirmation.length" class="task-state-group">
+              <span class="task-state-label">待确认</span>
+              <div
+                v-for="(item, index) in taskState.payload.pendingConfirmation"
+                :key="`pending-${index}`"
+                class="task-state-bullet"
+              >
+                {{ String(item) }}
+              </div>
+            </div>
+            <div v-if="Array.isArray(taskState.payload?.blockers) && taskState.payload.blockers.length" class="task-state-group">
+              <span class="task-state-label">当前阻塞</span>
+              <div
+                v-for="(item, index) in taskState.payload.blockers"
+                :key="`blocker-${index}`"
+                class="task-state-bullet"
+              >
+                {{ String(item) }}
+              </div>
+            </div>
+          </div>
+
+          <div v-if="compactionRecalled || compactionCreated.length" class="compaction-list">
+            <div class="runtime-section-title">历史压缩</div>
+
+            <div v-if="compactionRecalled" class="compaction-card">
+              <div class="compaction-top">
+                <span class="compaction-badge">已注入</span>
+                <span class="compaction-meta">
+                  {{ Number(compactionRecalled.payload?.blockCount || 0) }} 个压缩块
+                </span>
+              </div>
+              <div
+                v-if="typeof compactionRecalled.payload?.preview === 'string' && compactionRecalled.payload.preview"
+                class="compaction-summary"
+              >
+                {{ String(compactionRecalled.payload.preview) }}
+              </div>
+            </div>
+
+            <div
+              v-for="(event, index) in compactionCreated"
+              :key="event.id || `compaction-${index}`"
+              class="compaction-card"
+            >
+              <div class="compaction-top">
+                <span class="compaction-badge created">新生成</span>
+                <span class="compaction-meta">
+                  覆盖 {{ Number(event.payload?.sourceStartIndex || 0) }}..{{ Number(event.payload?.sourceEndIndex || 0) }}
+                </span>
+                <span class="compaction-meta">
+                  {{ Number(event.payload?.messageCount || 0) }} 条消息
+                </span>
+              </div>
+              <div v-if="event.payload?.goal" class="compaction-line">
+                <span class="compaction-label">目标</span>
+                <span>{{ String(event.payload.goal) }}</span>
+              </div>
+              <div v-if="event.payload?.summaryText" class="compaction-summary">
+                {{ String(event.payload.summaryText) }}
+              </div>
+              <div v-if="eventPayloadList(event.payload?.completed).length" class="compaction-group">
+                <span class="compaction-label">已完成</span>
+                <div
+                  v-for="(item, itemIndex) in eventPayloadList(event.payload?.completed)"
+                  :key="`completed-${index}-${itemIndex}`"
+                  class="compaction-bullet"
+                >
+                  {{ item }}
+                </div>
+              </div>
+              <div v-if="eventPayloadList(event.payload?.pending).length" class="compaction-group">
+                <span class="compaction-label">待处理</span>
+                <div
+                  v-for="(item, itemIndex) in eventPayloadList(event.payload?.pending)"
+                  :key="`pending-${index}-${itemIndex}`"
+                  class="compaction-bullet"
+                >
+                  {{ item }}
+                </div>
+              </div>
+              <div v-if="eventPayloadList(event.payload?.blockers).length" class="compaction-group">
+                <span class="compaction-label">阻塞</span>
+                <div
+                  v-for="(item, itemIndex) in eventPayloadList(event.payload?.blockers)"
+                  :key="`blocker-${index}-${itemIndex}`"
+                  class="compaction-bullet"
+                >
+                  {{ item }}
+                </div>
+              </div>
+              <div v-if="eventPayloadList(event.payload?.artifactRefs).length" class="compaction-group">
+                <span class="compaction-label">artifact</span>
+                <div
+                  v-for="(item, itemIndex) in eventPayloadList(event.payload?.artifactRefs)"
+                  :key="`artifact-${index}-${itemIndex}`"
+                  class="compaction-bullet mono"
+                >
+                  {{ item }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="executionFacts.length" class="fact-list">
+            <div class="runtime-section-title">已验证事实</div>
+            <div
+              v-for="fact in executionFacts"
+              :key="`${runtime.turn.id}-${fact.key}`"
+              class="fact-card"
+            >
+              <div class="fact-top">
+                <span class="fact-tool">{{ fact.sourceTool }}</span>
+                <span v-if="fact.sticky" class="fact-badge">sticky</span>
+              </div>
+              <div class="fact-summary">{{ fact.summary }}</div>
+            </div>
+          </div>
+
+          <div v-if="memoryRecalls.length" class="memory-recall-list">
+            <div class="runtime-section-title">记忆召回</div>
+            <div
+              v-for="memory in memoryRecalls"
+              :key="`${runtime.turn.id}-${memory.slug}-${memory.title}`"
+              class="memory-recall-card"
+            >
+              <div class="memory-recall-top">
+                <span class="memory-folder">{{ memory.folder }}</span>
+                <span class="memory-title-line">{{ memory.title }}</span>
+              </div>
+              <div class="memory-snippet">{{ memory.snippet }}</div>
+            </div>
+          </div>
+
+          <div v-if="latestMemoryCandidate || latestMemorySaved" class="memory-runtime-meta">
+            <div v-if="latestMemoryCandidate" class="memory-runtime-line">
+              <span class="runtime-section-title inline">记忆候选</span>
+              <span>{{ latestMemoryCandidate.summary }}</span>
+            </div>
+            <div v-if="latestMemorySaved" class="memory-runtime-line">
+              <span class="runtime-section-title inline">知识库写入</span>
+              <span>{{ latestMemorySaved.summary }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="runtime-block">
+        <button
+          class="runtime-subtoggle"
+          @click="
+            toolExpanded = !toolExpanded;
+            toolExpandedState.set(runtime.turn.id, toolExpanded)
+          "
+        >
+          <div class="runtime-subcopy">
+            <span class="runtime-section-title">工具调用</span>
+            <span class="runtime-meta">
+              {{ toolCount }} 个工具<template v-if="delegationCount"> · {{ delegationCount }} 次委派</template>
+            </span>
+          </div>
+          <span class="runtime-chevron">{{ toolExpanded ? "▾" : "▸" }}</span>
+        </button>
+
+        <div v-if="toolExpanded" class="runtime-subbody">
+          <div v-if="runtime.delegatedTurns.length" class="delegate-turn-list">
+            <div class="runtime-section-title">子 Agent</div>
+            <div
+              v-for="child in runtime.delegatedTurns"
+              :key="child.turn.id"
+              class="delegate-turn-card"
+            >
+              <div class="delegate-turn-head">
+                <div class="delegate-turn-main">
+                  <span class="delegate-turn-name">{{ child.turn.agentName || "子 Agent" }}</span>
+                  <span class="delegate-turn-status">{{ runtimeStatusLabel(child.turn.status) }}</span>
+                  <span v-if="runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt)" class="delegate-turn-meta">
+                    {{ runtimeElapsedLabel(child.turn.startedAt, child.turn.finishedAt) }}
+                  </span>
+                </div>
+                <div class="delegate-turn-task">{{ child.turn.userContent }}</div>
+              </div>
+
+              <div v-if="child.tools.length" class="delegate-turn-tools">
+                <ExecutionCard
+                  v-for="(tool, index) in child.tools"
+                  :key="`${child.turn.id}-${index}`"
+                  :exec="tool"
+                />
+              </div>
+              <div v-else class="delegate-turn-empty">{{ childWaitingLabel(child) }}</div>
+            </div>
+          </div>
+
+          <div v-if="runtime.tools.length" class="runtime-tools">
             <ExecutionCard
-              v-for="(tool, index) in child.tools"
-              :key="`${child.turn.id}-${index}`"
+              v-for="(tool, index) in runtime.tools"
+              :key="`${runtime.turn.id}-${index}`"
               :exec="tool"
             />
           </div>
-          <div v-else class="delegate-turn-empty">{{ childWaitingLabel(child) }}</div>
+          <div v-else-if="!hasToolSection" class="runtime-empty">{{ waitingLabel }}</div>
+          <div v-else class="runtime-empty">暂无直接工具输出</div>
         </div>
       </div>
-
-      <div v-if="runtime.tools.length" class="runtime-tools">
-        <ExecutionCard
-          v-for="(tool, index) in runtime.tools"
-          :key="`${runtime.turn.id}-${index}`"
-          :exec="tool"
-        />
-      </div>
-      <div v-else class="runtime-empty">{{ waitingLabel }}</div>
     </div>
   </div>
 </template>
@@ -604,6 +673,45 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   flex-direction: column;
   gap: 8px;
   margin-top: 10px;
+}
+
+.runtime-block {
+  margin-top: 10px;
+  border: 1px solid rgba(var(--accent-rgb), 0.08);
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), 0.03);
+  overflow: hidden;
+}
+
+.runtime-subtoggle {
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.runtime-subtoggle:hover {
+  background: rgba(var(--accent-rgb), 0.04);
+}
+
+.runtime-subcopy {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.runtime-subbody {
+  border-top: 1px solid rgba(var(--accent-rgb), 0.08);
+  padding: 0 10px 10px;
 }
 
 .runtime-section-title {
