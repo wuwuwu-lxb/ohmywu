@@ -7,6 +7,7 @@ export interface ExecutionInfo {
   status: "running" | "success" | "failed" | "denied" | "needs_confirm"
   input?: string
   output?: string
+  artifactId?: string
   artifactPath?: string
   error?: string
   duration?: string
@@ -43,7 +44,7 @@ const executionStateText = computed(() => {
         <span class="exec-action-sub">{{ exec.action }} · {{ statusText }} · {{ executionStateText }}</span>
       </span>
       <span v-if="exec.duration" class="exec-duration">{{ exec.duration }}</span>
-      <span v-if="exec.artifactPath" class="exec-badge">artifact</span>
+      <span v-if="exec.artifactId || exec.artifactPath" class="exec-badge">artifact</span>
       <span class="exec-chevron">{{ expanded ? "▾" : "▸" }}</span>
     </button>
 
@@ -57,10 +58,11 @@ const executionStateText = computed(() => {
         <span class="exec-label">输出</span>
         <pre class="exec-code">{{ exec.output }}</pre>
       </div>
-      <div v-if="exec.artifactPath" class="exec-section">
+      <div v-if="exec.artifactId || exec.artifactPath" class="exec-section">
         <span class="exec-label">完整输出</span>
-        <div class="exec-artifact-note">大结果已落到本地 artifact，需要时可再次读取这个路径。</div>
-        <pre class="exec-code exec-artifact-path">{{ exec.artifactPath }}</pre>
+        <div class="exec-artifact-note">大结果已落到本地 artifact，后续可通过 artifact 引用继续读取。</div>
+        <pre v-if="exec.artifactId" class="exec-code">artifact: {{ exec.artifactId }}</pre>
+        <pre v-if="exec.artifactPath" class="exec-code exec-artifact-path">{{ exec.artifactPath }}</pre>
       </div>
       <div v-if="exec.error" class="exec-section error">
         <span class="exec-label">错误</span>

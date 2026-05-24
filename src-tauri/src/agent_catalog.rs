@@ -274,6 +274,7 @@ fn default_catalog_file() -> AgentCatalogFile {
                 memory_scope: DEFAULT_CORE_SCOPE.into(),
                 tools: vec![
                     "read".into(),
+                    "artifact_read".into(),
                     "grep".into(),
                     "glob".into(),
                     "bash".into(),
@@ -299,6 +300,7 @@ fn default_catalog_file() -> AgentCatalogFile {
                 memory_scope: DEFAULT_MEMORY_SCOPE.into(),
                 tools: vec![
                     "read".into(),
+                    "artifact_read".into(),
                     "wiki_read".into(),
                     "wiki_search".into(),
                     "wiki_write".into(),
@@ -323,6 +325,7 @@ fn default_catalog_file() -> AgentCatalogFile {
                 memory_scope: DEFAULT_CODER_SCOPE.into(),
                 tools: vec![
                     "read".into(),
+                    "artifact_read".into(),
                     "grep".into(),
                     "glob".into(),
                     "edit".into(),
@@ -366,6 +369,12 @@ fn ensure_primary(mut agents: Vec<AgentRecord>) -> Vec<AgentRecord> {
 }
 
 fn normalize_agent_record(mut item: AgentRecord) -> AgentRecord {
+    if item.tools.iter().any(|tool| tool == "read")
+        && !item.tools.iter().any(|tool| tool == "artifact_read")
+    {
+        item.tools.push("artifact_read".into());
+    }
+
     if item.id == "core" {
         if item.delegate_tags.is_empty() {
             item.delegate_tags = vec![

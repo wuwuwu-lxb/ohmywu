@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod bash;
 pub mod checklist;
 pub mod edit;
@@ -43,6 +44,7 @@ pub struct ExecuteResult {
     pub capability: String,
     pub status: String,
     pub output: Option<String>,
+    pub artifact_id: Option<String>,
     pub artifact_path: Option<String>,
     pub error: Option<String>,
     pub task_id: String,
@@ -180,6 +182,30 @@ pub fn tool_params(name: &str) -> Option<serde_json::Value> {
                 }
             },
             "required": ["path"]
+        })),
+        "artifact_read" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "artifactId": {
+                    "type": ["string", "null"],
+                    "description": "Stable artifact id emitted by a previous tool execution"
+                },
+                "path": {
+                    "type": ["string", "null"],
+                    "description": "Optional absolute artifact path from a previous tool execution"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Character offset to start reading from",
+                    "minimum": 0
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of characters to read for this chunk",
+                    "minimum": 200,
+                    "maximum": 8000
+                }
+            }
         })),
         "write" => Some(serde_json::json!({
             "type": "object",
@@ -406,6 +432,7 @@ pub async fn dispatch_tool(
                 capability: cap_name.clone(),
                 status: "not_found".into(),
                 output: None,
+                artifact_id: None,
                 artifact_path: None,
                 error: Some(format!("Capability '{}' not registered", cap_name)),
                 task_id: String::new(),
@@ -425,6 +452,7 @@ pub async fn dispatch_tool(
             capability: cap_name,
             status: "denied".into(),
             output: None,
+            artifact_id: None,
             artifact_path: None,
             error: Some(format!("Tool is disabled in {:?} mode", agent_mode)),
             task_id: String::new(),
@@ -448,6 +476,7 @@ pub async fn dispatch_tool(
             capability: cap_name,
             status: "denied".into(),
             output: None,
+            artifact_id: None,
             artifact_path: None,
             error: Some(format!("Policy denied in {:?} mode", decision.mode)),
             task_id: String::new(),
@@ -482,6 +511,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "denied".into(),
                 output: None,
+                artifact_id: None,
                 artifact_path: None,
                 error: Some(msg),
                 task_id: String::new(),
@@ -495,6 +525,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "needs_confirm".into(),
                 output: Some(msg),
+                artifact_id: None,
                 artifact_path: None,
                 error: None,
                 task_id: String::new(),
@@ -516,6 +547,8 @@ pub async fn dispatch_tool(
     let exec_result: Result<ExecOutput, String> = if cap.implementation == "thinking" {
         // thinking is instant, no blocking needed
         thinking::execute(&params)
+    } else if cap.implementation == "artifact_read" {
+        artifact::execute(&params, &state.data_dir)
     } else if cap.implementation == "checklist_write" {
         checklist::write(&params, &state.runtime)
     } else if cap.implementation == "capability_list" {
@@ -573,14 +606,14 @@ pub async fn dispatch_tool(
     match exec_result {
         Ok(exec_out) => {
             let output_raw = exec_out.output.unwrap_or_default();
-            let (output, artifact_path) =
+            let finalized =
                 finalize_tool_output(state, &cap_name, &cap.implementation, &task_id, &output_raw);
             let status = if exec_out.exit_code == 0 {
                 "success"
             } else {
                 "failed"
             };
-            let detail = output.as_deref().unwrap_or("(empty)");
+            let detail = finalized.output.as_deref().unwrap_or("(empty)");
             state.tasks.complete(&task_id, detail);
             state.audit.record(
                 "user",
@@ -593,8 +626,9 @@ pub async fn dispatch_tool(
             ExecuteResult {
                 capability: cap_name,
                 status: status.into(),
-                output,
-                artifact_path,
+                output: finalized.output,
+                artifact_id: finalized.artifact_id,
+                artifact_path: finalized.artifact_path,
                 error: exec_out.stderr.filter(|s| !s.is_empty()),
                 task_id,
                 duration_ms,
@@ -615,6 +649,7 @@ pub async fn dispatch_tool(
                 capability: cap_name,
                 status: "failed".into(),
                 output: None,
+                artifact_id: None,
                 artifact_path: None,
                 error: Some(err_msg),
                 task_id,
@@ -636,6 +671,12 @@ fn describe_target(cap: &str, params: &serde_json::Value) -> String {
             .get("path")
             .and_then(|v| v.as_str())
             .unwrap_or("(no path)")
+            .to_string(),
+        "artifact_read" => params
+            .get("artifactId")
+            .and_then(|v| v.as_str())
+            .or_else(|| params.get("path").and_then(|v| v.as_str()))
+            .unwrap_or("(no artifact)")
             .to_string(),
         "write" => params
             .get("path")
@@ -707,6 +748,17 @@ pub struct ExecOutput {
 const LARGE_RESULT_THRESHOLD: usize = 10_000;
 const LARGE_RESULT_SUMMARY_LIMIT: usize = 1_800;
 
+struct FinalizedToolOutput {
+    output: Option<String>,
+    artifact_id: Option<String>,
+    artifact_path: Option<String>,
+}
+
+struct ArtifactHandle {
+    id: String,
+    path: PathBuf,
+}
+
 pub fn truncate(s: &str, max_chars: usize) -> String {
     if s.chars().count() <= max_chars {
         s.to_string()
@@ -723,23 +775,36 @@ fn finalize_tool_output(
     implementation: &str,
     task_id: &str,
     output_raw: &str,
-) -> (Option<String>, Option<String>) {
+) -> FinalizedToolOutput {
     if output_raw.is_empty() {
-        return (None, None);
+        return FinalizedToolOutput {
+            output: None,
+            artifact_id: None,
+            artifact_path: None,
+        };
     }
 
     if implementation == "agent_delegate" || output_raw.chars().count() <= LARGE_RESULT_THRESHOLD {
-        return (Some(output_raw.to_string()), None);
+        return FinalizedToolOutput {
+            output: Some(output_raw.to_string()),
+            artifact_id: None,
+            artifact_path: None,
+        };
     }
 
     match persist_output_artifact(state, capability, task_id, output_raw) {
-        Ok(path) => {
+        Ok(handle) => {
             let summary = format!(
-                "输出较长，完整结果已保存到本地 artifact：{}\n\n{}",
-                path.display(),
+                "输出较长，完整结果已保存到 artifact `{}`。\n路径：{}\n\n{}",
+                handle.id,
+                handle.path.display(),
                 truncate(output_raw, LARGE_RESULT_SUMMARY_LIMIT)
             );
-            (Some(summary), Some(path.display().to_string()))
+            FinalizedToolOutput {
+                output: Some(summary),
+                artifact_id: Some(handle.id),
+                artifact_path: Some(handle.path.display().to_string()),
+            }
         }
         Err(err) => {
             let fallback = format!(
@@ -747,7 +812,11 @@ fn finalize_tool_output(
                 truncate(output_raw, LARGE_RESULT_THRESHOLD),
                 err
             );
-            (Some(fallback), None)
+            FinalizedToolOutput {
+                output: Some(fallback),
+                artifact_id: None,
+                artifact_path: None,
+            }
         }
     }
 }
@@ -757,7 +826,7 @@ fn persist_output_artifact(
     capability: &str,
     task_id: &str,
     output_raw: &str,
-) -> Result<PathBuf, String> {
+) -> Result<ArtifactHandle, String> {
     let dir = state.data_dir.join("runtime").join("artifacts");
     fs::create_dir_all(&dir)
         .map_err(|e| format!("Create artifact dir {}: {}", dir.display(), e))?;
@@ -766,16 +835,20 @@ fn persist_output_artifact(
         .duration_since(UNIX_EPOCH)
         .map_err(|e| format!("Artifact timestamp: {}", e))?
         .as_millis();
-    let filename = format!(
-        "{}-{}-{}.txt",
+    let artifact_id = format!(
+        "{}-{}-{}",
         sanitize_artifact_segment(task_id),
         sanitize_artifact_segment(capability),
         timestamp
     );
+    let filename = format!("{}.txt", artifact_id);
     let path = dir.join(filename);
     fs::write(&path, output_raw)
         .map_err(|e| format!("Write artifact {}: {}", path.display(), e))?;
-    Ok(path)
+    Ok(ArtifactHandle {
+        id: artifact_id,
+        path,
+    })
 }
 
 fn sanitize_artifact_segment(value: &str) -> String {

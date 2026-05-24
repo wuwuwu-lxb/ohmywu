@@ -93,6 +93,10 @@ fn params_as_string(tool_name: &str, params: &serde_json::Value) -> String {
         "write" => params.get("path").and_then(|v| v.as_str()),
         "edit" => params.get("file_path").and_then(|v| v.as_str()),
         "read" => params.get("path").and_then(|v| v.as_str()),
+        "artifact_read" => params
+            .get("artifactId")
+            .and_then(|v| v.as_str())
+            .or_else(|| params.get("path").and_then(|v| v.as_str())),
         "glob" => params.get("pattern").and_then(|v| v.as_str()),
         "grep" => params.get("pattern").and_then(|v| v.as_str()),
         "web_fetch" => params.get("url").and_then(|v| v.as_str()),

@@ -54,7 +54,7 @@ const SYSTEM_PROMPT: &str = "\
 
 ## 权限规则
 
-- 只读工具（read/glob/grep/web_fetch/thinking）始终允许。
+- 只读工具（read/artifact_read/glob/grep/web_fetch/thinking）始终允许。
 - 写入工具（write/edit）需要用户确认。
 - 高风险工具（bash）需要用户确认。
 - 如果工具返回「需要确认」，先向用户说明要做什么，等待用户同意后再执行。
@@ -84,6 +84,23 @@ struct ExecutionContext {
     fact_count: usize,
     facts: Vec<ExecutionFact>,
     text: String,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContextPrepared {
+    history_messages: usize,
+    history_turns: usize,
+    memory_hit_count: usize,
+    task_completed_count: usize,
+    task_pending_confirmation_count: usize,
+    task_blocker_count: usize,
+    execution_fact_count: usize,
+    sticky_execution_fact_count: usize,
+    artifact_reference_count: usize,
+    tool_count: usize,
+    approx_context_bytes: usize,
+    sources: Vec<String>,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -134,6 +151,13 @@ pub async fn agent_loop(
     let memory_context = build_memory_context(state, agent_profile, user_message);
     let task_state_context = build_task_state_context(&history, turn_id);
     let execution_context = build_execution_context(&history);
+    let history_window = history
+        .iter()
+        .rev()
+        .take(20)
+        .rev()
+        .cloned()
+        .collect::<Vec<_>>();
 
     if let Some(handle) = app_handle
         && let Some(memory) = &memory_context
@@ -199,7 +223,7 @@ pub async fn agent_loop(
     )));
 
     // include recent session history (last 20 messages)
-    for msg in history.iter().rev().take(20).rev() {
+    for msg in &history_window {
         messages.push(ChatMessage {
             role: msg.role.clone(),
             content: msg.content.clone(),
@@ -211,6 +235,26 @@ pub async fn agent_loop(
 
     // add current user message
     messages.push(ChatMessage::user(user_message));
+
+    if let Some(handle) = app_handle
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "context.prepared",
+            "已组装本轮上下文",
+            serde_json::to_value(build_context_prepared(
+                &history_window,
+                memory_context.as_ref(),
+                task_state_context.as_ref(),
+                execution_context.as_ref(),
+                tools.len(),
+                approx_context_bytes(&messages, &tools),
+            ))
+            .unwrap_or_else(|_| serde_json::json!({})),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
 
     // conversation loop
     for _iteration in 0..MAX_ITERATIONS {
@@ -372,6 +416,7 @@ pub async fn agent_loop(
                 capability: capability.clone(),
                 input: input.clone(),
                 output: result.output.clone(),
+                artifact_id: result.artifact_id.clone(),
                 artifact_path: result.artifact_path.clone(),
                 error: result.error.clone(),
                 status: result.status.clone(),
@@ -402,6 +447,7 @@ pub async fn agent_loop(
                         "toolCallId": tc_id,
                         "inputPreview": preview_text(input, 256),
                         "outputPreview": preview_text(result.output.as_deref().unwrap_or(""), 512),
+                        "artifactId": result.artifact_id,
                         "artifactPath": result.artifact_path,
                         "errorPreview": result.error.as_deref().map(|s| preview_text(s, 256)),
                         "durationMs": result.duration_ms,
@@ -620,6 +666,73 @@ fn build_tool_prompt(state: &AppState) -> String {
     lines.join("\n")
 }
 
+fn build_context_prepared(
+    history_window: &[SessionMessage],
+    memory_context: Option<&MemoryContext>,
+    task_state_context: Option<&TaskStateContext>,
+    execution_context: Option<&ExecutionContext>,
+    tool_count: usize,
+    approx_context_bytes: usize,
+) -> ContextPrepared {
+    let history_turns = history_window
+        .iter()
+        .filter_map(|msg| msg.turn_id.as_deref())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
+    let artifact_reference_count = history_window
+        .iter()
+        .flat_map(|msg| msg.executions.iter().flatten())
+        .filter(|execution| execution.artifact_id.is_some() || execution.artifact_path.is_some())
+        .count();
+
+    let memory_hit_count = memory_context.map(|context| context.hit_count).unwrap_or(0);
+    let task_completed_count = task_state_context
+        .map(|context| context.completed.len())
+        .unwrap_or(0);
+    let task_pending_confirmation_count = task_state_context
+        .map(|context| context.pending_confirmation.len())
+        .unwrap_or(0);
+    let task_blocker_count = task_state_context
+        .map(|context| context.blockers.len())
+        .unwrap_or(0);
+    let execution_fact_count = execution_context.map(|context| context.fact_count).unwrap_or(0);
+    let sticky_execution_fact_count = execution_context
+        .map(|context| context.facts.iter().filter(|fact| fact.sticky).count())
+        .unwrap_or(0);
+
+    let mut sources = vec!["system".to_string(), "tools".to_string(), "current_user".to_string()];
+    if !history_window.is_empty() {
+        sources.push("history".to_string());
+    }
+    if memory_hit_count > 0 {
+        sources.push("memory".to_string());
+    }
+    if task_state_context.is_some() {
+        sources.push("task_state".to_string());
+    }
+    if execution_fact_count > 0 {
+        sources.push("execution_facts".to_string());
+    }
+    if artifact_reference_count > 0 {
+        sources.push("artifacts".to_string());
+    }
+
+    ContextPrepared {
+        history_messages: history_window.len(),
+        history_turns,
+        memory_hit_count,
+        task_completed_count,
+        task_pending_confirmation_count,
+        task_blocker_count,
+        execution_fact_count,
+        sticky_execution_fact_count,
+        artifact_reference_count,
+        tool_count,
+        approx_context_bytes,
+        sources,
+    }
+}
+
 fn build_task_state_context(messages: &[SessionMessage], current_turn_id: &str) -> Option<TaskStateContext> {
     let previous_messages = messages
         .iter()
@@ -820,9 +933,17 @@ fn extract_execution_facts(execution: &ExecutionRecord) -> Vec<ExecutionFact> {
             return vec![ExecutionFact {
                 key: "env.git.status.short".into(),
                 summary: if output.is_empty() {
-                    "已验证当前 Git 工作区没有短格式变更输出。".into()
+                    with_artifact_note(
+                        "已验证当前 Git 工作区没有短格式变更输出。".into(),
+                        execution.artifact_id.as_deref(),
+                        execution.artifact_path.as_deref(),
+                    )
                 } else {
-                    format!("已验证当前 Git 工作区状态摘要：{}", preview_text(output, 140))
+                    with_artifact_note(
+                        format!("已验证当前 Git 工作区状态摘要：{}", preview_text(output, 140)),
+                        execution.artifact_id.as_deref(),
+                        execution.artifact_path.as_deref(),
+                    )
                 },
                 source_tool: capability,
                 sticky: true,
@@ -834,14 +955,18 @@ fn extract_execution_facts(execution: &ExecutionRecord) -> Vec<ExecutionFact> {
         let path = extract_named_arg(input, "path").unwrap_or_else(|| input.to_string());
         return vec![ExecutionFact {
             key: format!("fs.read.{}", path),
-            summary: format!(
-                "已成功读取文件 `{}`。内容摘要：{}",
-                path,
-                if output.is_empty() {
-                    "(空文件)".into()
-                } else {
-                    preview_text(output, 140)
-                }
+            summary: with_artifact_note(
+                format!(
+                    "已成功读取文件 `{}`。内容摘要：{}",
+                    path,
+                    if output.is_empty() {
+                        "(空文件)".into()
+                    } else {
+                        preview_text(output, 140)
+                    }
+                ),
+                execution.artifact_id.as_deref(),
+                execution.artifact_path.as_deref(),
             ),
             source_tool: capability,
             sticky: true,
@@ -882,13 +1007,21 @@ fn render_execution_fact(execution: &ExecutionRecord) -> String {
         "success" => {
             let output = execution.output.as_deref().unwrap_or("").trim();
             if output.is_empty() {
-                format!("`{}` 已成功执行：`{}`。", execution.capability, input)
+                with_artifact_note(
+                    format!("`{}` 已成功执行：`{}`。", execution.capability, input),
+                    execution.artifact_id.as_deref(),
+                    execution.artifact_path.as_deref(),
+                )
             } else {
-                format!(
-                    "`{}` 已成功执行：`{}`。结果摘要：{}",
-                    execution.capability,
-                    input,
-                    preview_text(output, 140)
+                with_artifact_note(
+                    format!(
+                        "`{}` 已成功执行：`{}`。结果摘要：{}",
+                        execution.capability,
+                        input,
+                        preview_text(output, 140)
+                    ),
+                    execution.artifact_id.as_deref(),
+                    execution.artifact_path.as_deref(),
                 )
             }
         }
@@ -918,6 +1051,28 @@ fn render_execution_fact(execution: &ExecutionRecord) -> String {
     }
 }
 
+fn with_artifact_note(
+    summary: String,
+    artifact_id: Option<&str>,
+    artifact_path: Option<&str>,
+) -> String {
+    match (artifact_id, artifact_path) {
+        (Some(id), Some(path)) if !id.trim().is_empty() && !path.trim().is_empty() => format!(
+            "{} 完整输出可通过 artifact `{}` 继续读取，路径为 `{}`。",
+            summary,
+            id.trim(),
+            path.trim()
+        ),
+        (Some(id), _) if !id.trim().is_empty() => {
+            format!("{} 完整输出可通过 artifact `{}` 继续读取。", summary, id.trim())
+        }
+        (_, Some(path)) if !path.trim().is_empty() => {
+            format!("{} 完整输出可在 `{}` 中继续读取。", summary, path.trim())
+        }
+        _ => summary,
+    }
+}
+
 fn build_tool_receipt(
     capability: &str,
     input: &str,
@@ -938,8 +1093,12 @@ fn build_tool_receipt(
         format!("input_summary: {}", preview_text(input.trim(), 180)),
     ];
 
+    if let Some(id) = result.artifact_id.as_deref() {
+        lines.push(format!("artifact_id: {}", id));
+    }
     if let Some(path) = result.artifact_path.as_deref() {
         lines.push(format!("artifact_path: {}", path));
+        lines.push("artifact_hint: read this path if full output is needed later".to_string());
     }
 
     match result.status.as_str() {
@@ -1106,6 +1265,7 @@ pub async fn delegate_to_agent(
                 "status": item.status,
                 "input": item.input,
                 "output": item.output,
+                "artifactId": item.artifact_id,
                 "artifactPath": item.artifact_path,
                 "error": item.error,
                 "durationMs": item.duration_ms,

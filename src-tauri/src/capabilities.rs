@@ -27,6 +27,12 @@ const BUILTIN_CAPABILITIES: &[BuiltinCapabilitySpec] = &[
         risk_level: RiskLevel::ReadOnly,
     },
     BuiltinCapabilitySpec {
+        name: "artifact_read",
+        title: "读取 Artifact",
+        description: "Read a bounded chunk from a previously saved tool-output artifact by artifact id or path.",
+        risk_level: RiskLevel::ReadOnly,
+    },
+    BuiltinCapabilitySpec {
         name: "write",
         title: "写入文件",
         description: "Write content to a file, creating parent directories if needed.",

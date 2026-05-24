@@ -109,11 +109,40 @@ const executionFacts = computed(() =>
     })
 )
 
+const contextPrepared = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "context.prepared")
+)
+
 const taskState = computed(() =>
   [...props.runtime.events]
     .reverse()
     .find((event) => event.kind === "task.state.recalled")
 )
+
+function sourceLabel(source: string) {
+  switch (source) {
+    case "system":
+      return "system"
+    case "tools":
+      return "tools"
+    case "current_user":
+      return "user"
+    case "history":
+      return "history"
+    case "memory":
+      return "memory"
+    case "task_state":
+      return "task"
+    case "execution_facts":
+      return "facts"
+    case "artifacts":
+      return "artifact"
+    default:
+      return source
+  }
+}
 
 const latestMemoryCandidate = computed(() =>
   [...props.runtime.events]
@@ -178,6 +207,58 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
     </button>
 
     <div v-if="expanded" class="runtime-body">
+      <div v-if="contextPrepared" class="context-card">
+        <div class="runtime-section-title">上下文来源</div>
+        <div class="context-line">
+          <span class="context-label">组成</span>
+          <div class="context-pill-row">
+            <span
+              v-for="source in Array.isArray(contextPrepared.payload?.sources) ? contextPrepared.payload.sources : []"
+              :key="String(source)"
+              class="context-pill"
+            >
+              {{ sourceLabel(String(source)) }}
+            </span>
+          </div>
+        </div>
+        <div class="context-line">
+          <span class="context-label">历史</span>
+          <span>
+            {{ Number(contextPrepared.payload?.historyMessages || 0) }} 条消息 /
+            {{ Number(contextPrepared.payload?.historyTurns || 0) }} 个回合
+          </span>
+        </div>
+        <div class="context-line">
+          <span class="context-label">记忆</span>
+          <span>{{ Number(contextPrepared.payload?.memoryHitCount || 0) }} 条</span>
+        </div>
+        <div class="context-line">
+          <span class="context-label">事实</span>
+          <span>
+            {{ Number(contextPrepared.payload?.executionFactCount || 0) }} 条
+            <template v-if="Number(contextPrepared.payload?.stickyExecutionFactCount || 0)">
+              · {{ Number(contextPrepared.payload?.stickyExecutionFactCount || 0) }} 条 sticky
+            </template>
+          </span>
+        </div>
+        <div class="context-line">
+          <span class="context-label">artifact</span>
+          <span>{{ Number(contextPrepared.payload?.artifactReferenceCount || 0) }} 个引用</span>
+        </div>
+        <div class="context-line">
+          <span class="context-label">任务状态</span>
+          <span>
+            已完成 {{ Number(contextPrepared.payload?.taskCompletedCount || 0) }}
+            · 待确认 {{ Number(contextPrepared.payload?.taskPendingConfirmationCount || 0) }}
+            · 阻塞 {{ Number(contextPrepared.payload?.taskBlockerCount || 0) }}
+          </span>
+        </div>
+        <div class="context-line">
+          <span class="context-label">体积</span>
+          <span>{{ Number(contextPrepared.payload?.approxContextBytes || 0) }} bytes · {{ Number(contextPrepared.payload?.toolCount || 0) }} 个工具定义</span>
+        </div>
+      </div>
+
       <div v-if="taskState" class="task-state-card">
         <div class="runtime-section-title">任务状态</div>
         <div v-if="taskState.payload?.lastUserGoal" class="task-state-line">
@@ -434,11 +515,13 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   min-width: 72px;
 }
 
+.context-card,
 .fact-list,
 .memory-recall-list {
   margin-top: 10px;
 }
 
+.context-card,
 .task-state-card,
 .fact-card,
 .memory-recall-card,
@@ -451,6 +534,7 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
 }
 
 .task-state-line,
+.context-line,
 .fact-top,
 .memory-recall-top,
 .memory-runtime-line {
@@ -482,6 +566,7 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   color: var(--accent);
 }
 
+.context-label,
 .task-state-label,
 .fact-summary,
 .memory-title-line {
@@ -489,10 +574,28 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
   color: var(--text-primary);
 }
 
+.context-label,
 .task-state-label {
   min-width: 68px;
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.context-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.context-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(var(--accent-rgb), 0.16);
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text-primary);
+  font-size: 10px;
+  font-family: var(--font-mono);
 }
 
 .task-state-group {
