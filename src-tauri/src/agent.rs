@@ -439,6 +439,8 @@ pub async fn agent_loop(
                     ExecuteRequest {
                         capability,
                         params,
+                        session_id: Some(session_id.to_string()),
+                        turn_id: Some(turn_id.to_string()),
                     },
                 )
                 .await;

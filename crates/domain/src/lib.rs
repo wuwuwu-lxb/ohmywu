@@ -192,6 +192,10 @@ pub fn chrono_now() -> String {
 /// Audit event — records every significant operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub actor: String,
     pub action: String,
     pub target: String,

@@ -714,15 +714,27 @@ onMounted(async () => {
 
           <div class="composer-actions">
             <button
+              v-if="!store.pending"
               class="send-btn"
-              :class="{ pending: store.pending }"
-              :disabled="store.pending || !input.trim()"
+              :disabled="!input.trim()"
               @click="send"
             >
-              <svg v-if="!store.pending" width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
                 <path d="M2 8L14 2L8 14L6 9L2 8Z" fill="currentColor" />
               </svg>
-              <span v-else class="spinner" />
+            </button>
+
+            <button
+              v-else
+              class="send-btn stop-btn"
+              :class="{ pending: store.pending, stopping: store.cancelling }"
+              :disabled="store.cancelling"
+              @click="store.cancelAgent()"
+            >
+              <span v-if="store.cancelling" class="spinner" />
+              <svg v-else width="16" height="16" viewBox="0 0 16 16" fill="none">
+                <rect x="3.5" y="3.5" width="9" height="9" rx="2" fill="currentColor" />
+              </svg>
             </button>
           </div>
         </div>
@@ -1591,6 +1603,21 @@ onMounted(async () => {
 }
 
 .send-btn.pending {
+  color: var(--text-primary);
+}
+
+.stop-btn {
+  background: rgba(248, 113, 113, 0.12);
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fca5a5;
+}
+
+.stop-btn:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.18);
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.stop-btn.stopping {
   color: var(--text-primary);
 }
 

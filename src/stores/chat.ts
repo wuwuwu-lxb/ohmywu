@@ -317,6 +317,7 @@ export const useChatStore = defineStore("chat", () => {
     loadStoredString(CHAT_CURRENT_SESSION_KEY, "") || null
   )
   const pending = ref(false)
+  const cancelling = ref(false)
   const error = ref<string | null>(null)
   const streamingContent = ref("")
   const agentMode = ref<AgentMode>("agent")
@@ -813,6 +814,7 @@ export const useChatStore = defineStore("chat", () => {
       timestamp: Date.now(),
     })
     pending.value = true
+    cancelling.value = false
     error.value = null
     streamingContent.value = ""
 
@@ -870,6 +872,7 @@ export const useChatStore = defineStore("chat", () => {
         unlistenStream = null
       }
       streamingContent.value = ""
+      cancelling.value = false
       pending.value = false
     }
   }
@@ -886,9 +889,12 @@ export const useChatStore = defineStore("chat", () => {
 
   async function cancelAgent() {
     try {
+      cancelling.value = true
+      runtimeStatus.value = "Cancelling"
       await invoke("cancel_agent")
     } catch (e) {
       console.error("Cancel agent:", e)
+      cancelling.value = false
     }
   }
 
@@ -999,6 +1005,7 @@ export const useChatStore = defineStore("chat", () => {
     sessions,
     currentSessionId,
     pending,
+    cancelling,
     error,
     streamingContent,
     agentMode,

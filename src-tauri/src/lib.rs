@@ -13,6 +13,7 @@ mod wechat_bridge;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::fs;
 use std::sync::RwLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -87,7 +88,10 @@ impl AppState {
         let session_agents = Arc::new(RwLock::new(HashMap::new()));
         let policy = Arc::new(PolicyEngine::new());
         let tasks = Arc::new(TaskEngine::new());
-        let audit = Arc::new(AuditLog::new());
+        let audit = Arc::new(
+            AuditLog::load(&data_dir.join("audit"))
+                .expect("failed to initialize audit log"),
+        );
         let session = Arc::new(SessionManager::new(data_dir.join("sessions")));
         let runtime = Arc::new(
             RuntimeStore::new(data_dir.join("runtime"))
@@ -459,6 +463,60 @@ fn get_audits(state: tauri::State<AppState>) -> Vec<AuditEvent> {
     state.audit.list(200)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuditExportResult {
+    path: String,
+    count: usize,
+}
+
+#[tauri::command]
+fn clear_audits(state: tauri::State<AppState>) -> Result<(), String> {
+    state.audit.clear()
+}
+
+#[tauri::command]
+fn export_audits(
+    session_id: Option<String>,
+    state: tauri::State<AppState>,
+) -> Result<AuditExportResult, String> {
+    let events = match session_id.as_deref() {
+        Some("__system__") => state.audit.list_by_session(None),
+        Some(id) => state.audit.list_by_session(Some(id)),
+        None => state.audit.list_all(),
+    };
+    let export_dir = state.data_dir.join("exports").join("audits");
+    fs::create_dir_all(&export_dir)
+        .map_err(|e| format!("Create export dir {}: {}", export_dir.display(), e))?;
+
+    let label = if let Some(session_id) = session_id.as_deref() {
+        if session_id == "__system__" {
+            "system".to_string()
+        } else {
+        state
+            .session
+            .get_session_summary(session_id)?
+            .map(|summary| summary.name)
+            .unwrap_or_else(|| session_id.to_string())
+        }
+    } else {
+        "all".to_string()
+    };
+    let sanitized = sanitize_filename(&label);
+    let timestamp = chrono_now()
+        .replace(':', "-")
+        .replace('.', "-");
+    let path = export_dir.join(format!("audit-{}-{}.json", sanitized, timestamp));
+    let content = serde_json::to_string_pretty(&events)
+        .map_err(|e| format!("Serialize audit export: {}", e))?;
+    fs::write(&path, content)
+        .map_err(|e| format!("Write audit export {}: {}", path.display(), e))?;
+    Ok(AuditExportResult {
+        path: path.display().to_string(),
+        count: events.len(),
+    })
+}
+
 // ── Tauri Commands: execution ────────────────────────────────────
 
 #[tauri::command]
@@ -659,6 +717,8 @@ async fn process_message(
         let req = tools::ExecuteRequest {
             capability: "read".into(),
             params: serde_json::json!({ "path": path }),
+            session_id: Some(session_id.to_string()),
+            turn_id: Some(turn.id.clone()),
         };
         let result = tools::dispatch_tool(state, req).await;
         let err_msg = result.error.clone().unwrap_or_default();
@@ -687,6 +747,8 @@ async fn process_message(
         let req = tools::ExecuteRequest {
             capability: "bash".into(),
             params: serde_json::json!({ "command": cmd }),
+            session_id: Some(session_id.to_string()),
+            turn_id: Some(turn.id.clone()),
         };
         let result = tools::dispatch_tool(state, req).await;
         let err_msg = result.error.clone().unwrap_or_default();
@@ -2763,6 +2825,26 @@ fn http_json_response<T: Serialize>(status_code: u16, body: &T) -> String {
     )
 }
 
+fn sanitize_filename(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if sanitized.is_empty() {
+        "audit".to_string()
+    } else {
+        sanitized
+    }
+}
+
 // ── Tauri App Entry ──────────────────────────────────────────────
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2797,6 +2879,8 @@ pub fn run() {
             get_agent_mode,
             get_tasks,
             get_audits,
+            clear_audits,
+            export_audits,
             get_llm_providers,
             execute_capability,
             set_policy_mode,

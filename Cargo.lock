@@ -2258,6 +2258,7 @@ version = "0.2.0"
 dependencies = [
  "ohmywu-domain",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

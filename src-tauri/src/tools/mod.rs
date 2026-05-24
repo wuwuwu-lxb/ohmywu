@@ -37,6 +37,8 @@ struct AgentDelegateInput {
 pub struct ExecuteRequest {
     pub capability: String,
     pub params: serde_json::Value,
+    pub session_id: Option<String>,
+    pub turn_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -465,6 +467,8 @@ pub async fn dispatch_tool(
     let decision = state.policy.check(cap.risk_level);
     if !decision.allowed {
         state.audit.record(
+            request.session_id.as_deref(),
+            request.turn_id.as_deref(),
             "user",
             &cap_name,
             "(denied by policy)",
@@ -500,6 +504,8 @@ pub async fn dispatch_tool(
     match permission_result {
         crate::permission::PermissionCheck::Denied(msg) => {
             state.audit.record(
+                request.session_id.as_deref(),
+                request.turn_id.as_deref(),
                 "user",
                 &cap_name,
                 "(denied by permission rules)",
@@ -616,6 +622,8 @@ pub async fn dispatch_tool(
             let detail = finalized.output.as_deref().unwrap_or("(empty)");
             state.tasks.complete(&task_id, detail);
             state.audit.record(
+                request.session_id.as_deref(),
+                request.turn_id.as_deref(),
                 "user",
                 &cap_name,
                 &target,
@@ -638,6 +646,8 @@ pub async fn dispatch_tool(
         Err(err_msg) => {
             state.tasks.fail(&task_id, &err_msg);
             state.audit.record(
+                request.session_id.as_deref(),
+                request.turn_id.as_deref(),
                 "user",
                 &cap_name,
                 &target,
