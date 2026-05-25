@@ -62,6 +62,10 @@ const statusLabel = computed(() => {
   switch (props.runtime.turn.status) {
     case "completed":
       return "已完成"
+    case "cancelled":
+      return "已中断"
+    case "failed":
+      return "失败"
     case "running":
       return "进行中"
     default:
@@ -154,6 +158,8 @@ function sourceLabel(source: string) {
       return "memory"
     case "task_state":
       return "task"
+    case "recent_tool_receipts":
+      return "receipts"
     case "execution_facts":
       return "facts"
     case "compressed_history":
@@ -185,12 +191,33 @@ const latestMemorySaved = computed(() =>
     .find((event) => event.kind === "memory.saved")
 )
 
+const recentToolReceipts = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "tool.receipts.recalled")
+)
+
+const actionReferences = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "action.references.injected")
+)
+
+const memoryReferences = computed(() =>
+  [...props.runtime.events]
+    .reverse()
+    .find((event) => event.kind === "memory.references.injected")
+)
+
 const hasContextSection = computed(() =>
   !!contextPrepared.value
   || !!taskState.value
   || !!compactionRecalled.value
   || compactionCreated.value.length > 0
   || executionFacts.value.length > 0
+  || !!actionReferences.value
+  || !!memoryReferences.value
+  || !!recentToolReceipts.value
   || memoryRecalls.value.length > 0
   || !!latestMemoryCandidate.value
   || !!latestMemorySaved.value
@@ -204,6 +231,10 @@ function runtimeStatusLabel(status: string) {
   switch (status) {
     case "completed":
       return "已完成"
+    case "cancelled":
+      return "已中断"
+    case "failed":
+      return "失败"
     case "running":
       return "进行中"
     default:
@@ -462,6 +493,57 @@ function childWaitingLabel(runtime: RuntimeTurnView) {
                 <span v-if="fact.sticky" class="fact-badge">sticky</span>
               </div>
               <div class="fact-summary">{{ fact.summary }}</div>
+            </div>
+          </div>
+
+          <div v-if="recentToolReceipts" class="memory-runtime-meta">
+            <div class="memory-runtime-line">
+              <span class="runtime-section-title inline">最近工具回执</span>
+              <span>{{ recentToolReceipts.summary }}</span>
+            </div>
+            <div
+              v-if="typeof recentToolReceipts.payload?.preview === 'string' && recentToolReceipts.payload.preview"
+              class="compaction-summary"
+            >
+              {{ String(recentToolReceipts.payload.preview) }}
+            </div>
+          </div>
+
+          <div v-if="actionReferences" class="memory-runtime-meta">
+            <div class="memory-runtime-line">
+              <span class="runtime-section-title inline">Action 引用</span>
+              <span>{{ actionReferences.summary }}</span>
+            </div>
+            <div
+              v-if="Array.isArray(actionReferences.payload?.actionIds) && actionReferences.payload?.actionIds.length"
+              class="context-pill-row"
+            >
+              <span
+                v-for="actionId in actionReferences.payload.actionIds"
+                :key="String(actionId)"
+                class="context-pill"
+              >
+                {{ String(actionId) }}
+              </span>
+            </div>
+          </div>
+
+          <div v-if="memoryReferences" class="memory-runtime-meta">
+            <div class="memory-runtime-line">
+              <span class="runtime-section-title inline">记忆引用</span>
+              <span>{{ memoryReferences.summary }}</span>
+            </div>
+            <div
+              v-if="Array.isArray(memoryReferences.payload?.memorySlugs) && memoryReferences.payload?.memorySlugs.length"
+              class="context-pill-row"
+            >
+              <span
+                v-for="slug in memoryReferences.payload.memorySlugs"
+                :key="String(slug)"
+                class="context-pill"
+              >
+                {{ String(slug) }}
+              </span>
             </div>
           </div>
 

@@ -34,6 +34,12 @@ interface ActionBlueprint {
   supportingFiles: string[]
 }
 
+function promptPreview(prompt: string) {
+  const normalized = prompt.trim()
+  if (!normalized) return "当前蓝图没有可展示的 prompt。"
+  return normalized.length > 280 ? `${normalized.slice(0, 280)}...` : normalized
+}
+
 const actions = ref<Action[]>([])
 const loading = ref(false)
 const refreshMsg = ref("")
@@ -154,7 +160,7 @@ onMounted(loadActions)
       <div>
         <h2 class="view-title">Action 注册</h2>
         <p class="view-subtitle">
-          管理 action 目录、状态和蓝图定义。
+          管理 action 目录、状态和蓝图定义。action 负责沉淀策略，不直接替代真实工具执行。
         </p>
       </div>
       <div class="head-actions">
@@ -171,13 +177,13 @@ onMounted(loadActions)
     <section class="summary-panel">
       <article class="summary-card">
         <span class="summary-label">Action 规范</span>
-        <strong class="summary-value">兼容外部 skill</strong>
-        <p class="summary-note">支持把 skill、prompt 和工作流沉淀为可复用 action。</p>
+        <strong class="summary-value">策略模板</strong>
+        <p class="summary-note">Action 用来沉淀 skill、prompt 和 workflow，不直接代表真实执行。</p>
       </article>
       <article class="summary-card">
-        <span class="summary-label">注册方式</span>
-        <strong class="summary-value">AI 自注册</strong>
-        <p class="summary-note">通过 `action_list` 和 `action_register` 维护注册表。</p>
+        <span class="summary-label">调用方式</span>
+        <strong class="summary-value">先读蓝图再执行</strong>
+        <p class="summary-note">推荐通过 `action_list` + `action_get` 读取 blueprint，再拆成真实 capability 调用。</p>
       </article>
       <article class="summary-card">
         <span class="summary-label">当前状态</span>
@@ -209,6 +215,11 @@ onMounted(loadActions)
           </div>
 
           <div class="action-desc">{{ a.description }}</div>
+
+          <div class="meta-block">
+            <span class="meta-label">定位</span>
+            <div class="meta-path">这是一个可复用策略模板，不是可验证执行结果。</div>
+          </div>
 
           <div v-if="a.capabilities.length" class="meta-block">
             <span class="meta-label">Capabilities</span>
@@ -265,12 +276,26 @@ onMounted(loadActions)
             <div v-else-if="detailErrors[a.id]" class="blueprint-error">{{ detailErrors[a.id] }}</div>
             <template v-else-if="actionBlueprints[a.id]">
               <div class="blueprint-top">
-                <span class="meta-label">Compiled Prompt</span>
-                <span class="chip">{{ actionBlueprints[a.id].mode }}</span>
+                <span class="meta-label">Blueprint</span>
+                <div class="chip-row">
+                  <span class="chip">{{ actionBlueprints[a.id].mode }}</span>
+                  <span
+                    v-for="capability in actionBlueprints[a.id].capabilities"
+                    :key="`${a.id}-${capability}`"
+                    class="chip subtle"
+                  >
+                    {{ capability }}
+                  </span>
+                </div>
               </div>
 
               <div v-if="actionBlueprints[a.id].sourceHint" class="meta-path">
                 {{ actionBlueprints[a.id].sourceHint }}
+              </div>
+
+              <div class="meta-block">
+                <span class="meta-label">Prompt 摘要</span>
+                <div class="meta-path">{{ promptPreview(actionBlueprints[a.id].compiledPrompt) }}</div>
               </div>
 
               <pre class="blueprint-code">{{ actionBlueprints[a.id].compiledPrompt }}</pre>
@@ -295,7 +320,7 @@ onMounted(loadActions)
     </div>
 
     <div v-if="!actions.length && !loading" class="empty-state">
-      <p>当前还没有 action。先在对话中让 AI 通过 `action_register` 注册一条新的 action。</p>
+      <p>当前还没有 action。先在对话中让 AI 通过 `action_register` 注册一条新的策略模板。</p>
     </div>
 
     <ConfirmDialog

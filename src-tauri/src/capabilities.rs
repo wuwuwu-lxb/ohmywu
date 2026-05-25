@@ -123,6 +123,12 @@ const BUILTIN_CAPABILITIES: &[BuiltinCapabilitySpec] = &[
         risk_level: RiskLevel::ReadOnly,
     },
     BuiltinCapabilitySpec {
+        name: "action_get",
+        title: "Action 蓝图读取",
+        description: "Read a registered action blueprint, including its compiled prompt, capability scope, and source metadata. This only loads the strategy template and does not execute anything.",
+        risk_level: RiskLevel::ReadOnly,
+    },
+    BuiltinCapabilitySpec {
         name: "action_register",
         title: "Action 目录注册",
         description: "Create or update a user-defined action converted from prompts, workflows, or external skills.",

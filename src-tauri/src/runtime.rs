@@ -186,17 +186,74 @@ impl RuntimeStore {
         Ok(turn)
     }
 
-    pub fn finish_turn(
+    pub fn finish_turn_completed(
         &self,
         session_id: &str,
         turn_id: &str,
         assistant_content: &str,
         execution_count: usize,
     ) -> Result<RuntimeTurn, String> {
+        self.finish_turn_with_status(
+            session_id,
+            turn_id,
+            "completed",
+            "turn.completed",
+            &format!("回合完成，执行 {} 个工具", execution_count),
+            assistant_content,
+            execution_count,
+        )
+    }
+
+    pub fn finish_turn_cancelled(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        assistant_content: &str,
+        execution_count: usize,
+    ) -> Result<RuntimeTurn, String> {
+        self.finish_turn_with_status(
+            session_id,
+            turn_id,
+            "cancelled",
+            "turn.cancelled",
+            &format!("回合已中断，已执行 {} 个工具", execution_count),
+            assistant_content,
+            execution_count,
+        )
+    }
+
+    pub fn finish_turn_failed(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        assistant_content: &str,
+        execution_count: usize,
+    ) -> Result<RuntimeTurn, String> {
+        self.finish_turn_with_status(
+            session_id,
+            turn_id,
+            "failed",
+            "turn.failed",
+            &format!("回合失败，执行 {} 个工具", execution_count),
+            assistant_content,
+            execution_count,
+        )
+    }
+
+    fn finish_turn_with_status(
+        &self,
+        session_id: &str,
+        turn_id: &str,
+        status: &str,
+        event_kind: &str,
+        event_summary: &str,
+        assistant_content: &str,
+        execution_count: usize,
+    ) -> Result<RuntimeTurn, String> {
         let mut turn = self
             .read_turn(turn_id)?
             .ok_or_else(|| format!("Runtime turn not found: {}", turn_id))?;
-        turn.status = "completed".into();
+        turn.status = status.into();
         turn.assistant_content = Some(assistant_content.to_string());
         turn.execution_count = execution_count;
         turn.finished_at = Some(chrono_now());
@@ -210,35 +267,16 @@ impl RuntimeStore {
         let _ = self.record_event(
             session_id,
             Some(&turn.id),
-            "turn.completed",
-            &format!("回合完成，执行 {} 个工具", execution_count),
+            event_kind,
+            event_summary,
             serde_json::json!({
+                "status": status,
                 "assistantContent": assistant_content,
                 "executionCount": execution_count,
             }),
         )?;
 
         Ok(turn)
-    }
-
-    pub fn append_tool_event(
-        &self,
-        session_id: &str,
-        turn_id: &str,
-        capability: &str,
-        status: &str,
-    ) -> Result<(), String> {
-        let _ = self.record_event(
-            session_id,
-            Some(turn_id),
-            "tool.completed",
-            &format!("{} -> {}", capability, status),
-            serde_json::json!({
-                "capability": capability,
-                "status": status,
-            }),
-        )?;
-        Ok(())
     }
 
     pub fn write_checklist(

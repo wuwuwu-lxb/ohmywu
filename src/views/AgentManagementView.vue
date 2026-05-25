@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 import { invoke } from "@tauri-apps/api/core"
 import ConfirmDialog from "../components/ConfirmDialog.vue"
 import ThemeSelect from "../components/ThemeSelect.vue"
@@ -19,8 +19,9 @@ const store = useAgentStore()
 const capabilities = ref<CapabilityInfo[]>([])
 const capabilityMsg = ref("")
 const deleteAgentId = ref<string | null>(null)
-const recallLimitOptions = [1, 2, 3, 4, 5, 6, 7, 8]
-const recallLimitSelectOptions = recallLimitOptions.map((limit) => ({
+const selectedAgentId = ref<string>("")
+
+const recallLimitOptions = [1, 2, 3, 4, 5, 6, 7, 8].map((limit) => ({
   label: `${limit} 条`,
   value: limit,
 }))
@@ -28,9 +29,17 @@ const delegatePriorityOptions = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100].map
   label: `${value}`,
   value,
 }))
+
 const deleteAgentTarget = computed(() =>
   store.agents.find((agent) => agent.id === deleteAgentId.value) || null
 )
+
+const selectedAgent = computed(() => {
+  if (!store.agents.length) return null
+  return store.agents.find((agent) => agent.id === selectedAgentId.value) || store.agents[0]
+})
+
+const primaryAgent = computed(() => store.agents.find((agent) => agent.primary) || null)
 
 const toolCapabilities = computed(() =>
   capabilities.value.filter((capability) => capability.enabled && capability.executable)
@@ -117,6 +126,25 @@ function updateDelegateTags(agent: AgentProfile, value: string) {
     .filter(Boolean)
 }
 
+function updateRecallLimit(agent: AgentProfile | null, value: string | number) {
+  if (!agent) return
+  agent.memoryScope.recallLimit = Number(value)
+}
+
+function updateDelegatePriority(agent: AgentProfile | null, value: string | number) {
+  if (!agent) return
+  agent.delegatePriority = Number(value)
+}
+
+function savingLabel(agent: AgentProfile) {
+  const key = agent.persistedId || agent.id
+  return store.saving[key] ? "保存中" : "自动保存"
+}
+
+function selectAgent(id: string) {
+  selectedAgentId.value = id
+}
+
 async function loadCapabilities() {
   capabilityMsg.value = ""
   try {
@@ -131,17 +159,46 @@ async function refreshAll() {
   await Promise.all([store.refresh(), loadCapabilities()])
 }
 
-function savingLabel(agent: AgentProfile) {
-  const key = agent.persistedId || agent.id
-  return store.saving[key] ? "保存中" : "自动保存"
+async function addAgent() {
+  await store.addAgent()
+  if (store.activeAgentId) {
+    selectedAgentId.value = store.activeAgentId
+  }
+}
+
+async function duplicateSelected() {
+  if (!selectedAgent.value) return
+  await store.duplicateAgent(selectedAgent.value.id)
+  if (store.activeAgentId) {
+    selectedAgentId.value = store.activeAgentId
+  }
 }
 
 async function confirmDeleteAgent() {
   if (!deleteAgentId.value) return
-  const id = deleteAgentId.value
+  const deletingId = deleteAgentId.value
   deleteAgentId.value = null
-  await store.removeAgent(id)
+  await store.removeAgent(deletingId)
+  if (selectedAgentId.value === deletingId) {
+    selectedAgentId.value = store.agents[0]?.id || ""
+  }
 }
+
+watch(
+  () => store.agents.map((agent) => agent.id),
+  (ids) => {
+    if (!ids.length) {
+      selectedAgentId.value = ""
+      return
+    }
+    if (!selectedAgentId.value || !ids.includes(selectedAgentId.value)) {
+      selectedAgentId.value = store.activeAgentId && ids.includes(store.activeAgentId)
+        ? store.activeAgentId
+        : ids[0]
+    }
+  },
+  { immediate: true }
+)
 
 onMounted(async () => {
   await Promise.all([store.init(), loadCapabilities()])
@@ -149,260 +206,275 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="agents-view">
+  <div class="agents-page">
     <header class="page-head">
       <div>
         <h2 class="page-title">Agent 管理</h2>
-        <p class="page-subtitle">
-          管理 Agent 的角色、记忆范围和能力边界。
-        </p>
+        <p class="page-subtitle">把目录、编辑和状态拆开，减少堆叠和视觉噪音。</p>
       </div>
-      <div class="head-actions">
-        <button type="button" class="small-btn" :disabled="store.loading" @click="refreshAll">
+      <div class="page-actions">
+        <button type="button" class="ghost-btn" :disabled="store.loading" @click="refreshAll">
           {{ store.loading ? "同步中" : "刷新目录" }}
         </button>
-        <button type="button" class="primary-btn" @click="store.addAgent">新增 Agent</button>
+        <button type="button" class="primary-btn" @click="addAgent">新增 Agent</button>
       </div>
     </header>
 
-    <section class="overview-grid">
-      <article class="overview-card">
-        <span class="overview-label">当前目录</span>
-        <strong class="overview-value">{{ store.agents.length }} 个 Agent</strong>
-        <p class="overview-note">支持主 Agent、专用 Agent 和长期角色配置。</p>
-      </article>
-      <article class="overview-card">
-        <span class="overview-label">注册路径</span>
-        <strong class="overview-value">前端直改 + AI 自注册</strong>
-        <p class="overview-note">支持界面编辑，也支持模型注册和更新。</p>
-      </article>
-      <article class="overview-card">
-        <span class="overview-label">工具治理</span>
-        <strong class="overview-value">{{ toolCapabilities.length }} 个可绑定能力</strong>
-        <p class="overview-note">按 Agent 控制能力暴露，减少无关工具进入上下文。</p>
-      </article>
-    </section>
+    <div class="summary-strip">
+      <div class="summary-card">
+        <span class="summary-label">总数</span>
+        <strong class="summary-value">{{ store.agents.length }}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">主 Agent</span>
+        <strong class="summary-value">{{ primaryAgent?.name || "未设置" }}</strong>
+      </div>
+      <div class="summary-card">
+        <span class="summary-label">可绑定能力</span>
+        <strong class="summary-value">{{ toolCapabilities.length }} 个</strong>
+      </div>
+    </div>
 
     <div v-if="store.syncError || capabilityMsg" class="sync-msg">
       {{ store.syncError || capabilityMsg }}
     </div>
 
-    <section class="agent-list">
-      <article v-for="agent in store.agents" :key="agent.persistedId || agent.id" class="agent-card">
-        <div class="agent-top">
-          <div class="agent-head-main">
-            <div class="agent-name-row">
-              <h3 class="agent-name">{{ agent.name }}</h3>
-              <span v-if="agent.primary" class="agent-badge">Primary</span>
-              <span v-if="agent.id === store.activeAgentId" class="agent-badge active">Active</span>
-              <span class="agent-badge subtle">{{ savingLabel(agent) }}</span>
-            </div>
-            <p class="agent-role-preview">{{ agent.role }}</p>
+    <section class="layout-shell">
+      <aside class="agent-sidebar">
+        <div class="sidebar-head">
+          <div>
+            <div class="sidebar-title">Agent 列表</div>
+            <div class="sidebar-note">先选中，再编辑。</div>
           </div>
-          <div class="agent-actions">
-            <button type="button" class="small-btn" @click="store.setActiveAgent(agent.id)">切换</button>
-            <button type="button" class="small-btn" @click="store.duplicateAgent(agent.id)">复制</button>
+        </div>
+
+        <div class="sidebar-list">
+          <button
+            v-for="agent in store.agents"
+            :key="agent.persistedId || agent.id"
+            type="button"
+            class="agent-row"
+            :class="{ active: selectedAgent?.id === agent.id }"
+            @click="selectAgent(agent.id)"
+          >
+            <div class="agent-row-top">
+              <span class="agent-row-name">{{ agent.name }}</span>
+              <span v-if="agent.primary" class="row-pill">Primary</span>
+              <span v-else-if="agent.id === store.activeAgentId" class="row-pill active">Active</span>
+            </div>
+            <div class="agent-row-role">{{ agent.role }}</div>
+            <div class="agent-row-meta">
+              <span>{{ summarizeMemoryScope(agent.memoryScope) }}</span>
+              <span>{{ agent.tools.length }} tools</span>
+            </div>
+          </button>
+        </div>
+      </aside>
+
+      <section v-if="selectedAgent" class="agent-detail">
+        <div class="detail-head">
+          <div>
+            <div class="detail-title-row">
+              <h3 class="detail-title">{{ selectedAgent.name }}</h3>
+              <span class="detail-pill">{{ savingLabel(selectedAgent) }}</span>
+              <span v-if="selectedAgent.id === store.activeAgentId" class="detail-pill active">当前使用中</span>
+            </div>
+            <p class="detail-subtitle">{{ selectedAgent.role }}</p>
+          </div>
+
+          <div class="detail-actions">
+            <button type="button" class="ghost-btn" @click="store.setActiveAgent(selectedAgent.id)">设为当前</button>
+            <button type="button" class="ghost-btn" @click="duplicateSelected">复制</button>
             <button
-              class="small-btn danger"
               type="button"
-              :disabled="!agent.deletable"
-              @click="deleteAgentId = agent.id"
+              class="ghost-btn danger"
+              :disabled="!selectedAgent.deletable"
+              @click="deleteAgentId = selectedAgent.id"
             >
               删除
             </button>
           </div>
         </div>
 
-        <div class="two-col">
-          <label class="field">
-            <span>名称</span>
-            <input v-model="agent.name" class="field-input" type="text" />
-          </label>
-          <label class="field">
-            <span>角色</span>
-            <input v-model="agent.role" class="field-input" type="text" />
-          </label>
-        </div>
-
-        <label class="field">
-          <span>人格</span>
-          <textarea v-model="agent.persona" rows="4" class="field-input multiline" />
-        </label>
-
-        <section class="scope-panel">
-          <div class="scope-head">
-            <div>
-              <div class="scope-title">记忆 Scope</div>
-              <div class="scope-summary">{{ summarizeMemoryScope(agent.memoryScope) }}</div>
+        <div class="detail-grid">
+          <section class="panel-card">
+            <div class="panel-title">基础信息</div>
+            <div class="field-grid">
+              <label class="field">
+                <span>名称</span>
+                <input v-model="selectedAgent.name" class="field-input" type="text" />
+              </label>
+              <label class="field">
+                <span>角色</span>
+                <input v-model="selectedAgent.role" class="field-input" type="text" />
+              </label>
             </div>
-            <div class="scope-mode-group">
-              <button
-                v-for="mode in ['none', 'focused', 'all']"
-                :key="mode"
-                class="scope-mode-chip"
-                type="button"
-                :class="{ active: agent.memoryScope.mode === mode }"
-                @click="setScopeMode(agent, mode as MemoryScopeMode)"
-              >
-                {{ mode === "none" ? "禁用" : mode === "all" ? "全量" : "定向" }}
-              </button>
-            </div>
-          </div>
-
-          <div class="scope-grid">
-            <label class="field">
-              <span>Scope 名称</span>
-              <input
-                v-model="agent.memoryScope.label"
-                class="field-input"
-                type="text"
-                placeholder="比如：产品研究 / 长期偏好 / 项目上下文"
-              />
-            </label>
 
             <label class="field">
-              <span>召回上限</span>
-              <ThemeSelect
-                class="field-input"
-                :model-value="agent.memoryScope.recallLimit"
-                :options="recallLimitSelectOptions"
-                @update:model-value="(value) => agent.memoryScope.recallLimit = Number(value)"
-              />
+              <span>人格</span>
+              <textarea v-model="selectedAgent.persona" rows="5" class="field-input multiline" />
             </label>
-          </div>
 
-          <div class="field">
-            <span>知识目录</span>
-            <div class="folder-row">
-              <button
-                v-for="folder in MEMORY_SCOPE_FOLDERS"
-                :key="folder"
-                class="folder-chip"
-                type="button"
-                :class="{
-                  active: agent.memoryScope.folders.includes(folder),
-                  disabled: agent.memoryScope.mode !== 'focused',
-                }"
-                @click="toggleFolder(agent, folder)"
-              >
-                {{ MEMORY_SCOPE_FOLDER_LABELS[folder] }}
-                <span class="folder-code">{{ folder }}</span>
-              </button>
+            <div class="meta-line">
+              <span class="meta-key">Agent ID</span>
+              <span class="meta-value mono">{{ selectedAgent.id }}</span>
             </div>
-          </div>
+          </section>
 
-          <label class="field">
-            <span>记忆策略说明</span>
-            <textarea
-              v-model="agent.memoryScope.notes"
-              rows="3"
-              class="field-input multiline"
-              placeholder="比如：优先召回产品决策、用户偏好和近期复盘，不要把零碎临时信息都塞进上下文。"
-            />
-          </label>
-        </section>
-
-        <section class="tool-panel">
-          <div class="tool-head">
-            <div>
-              <div class="scope-title">工具范围</div>
-              <div class="scope-summary">
-                {{ agent.tools.length ? `${agent.tools.length} 个能力` : "未绑定能力，将只剩系统工具" }}
+          <section class="panel-card">
+            <div class="panel-title">记忆范围</div>
+            <div class="scope-head">
+              <div class="scope-summary">{{ summarizeMemoryScope(selectedAgent.memoryScope) }}</div>
+              <div class="scope-mode-group">
+                <button
+                  v-for="mode in ['none', 'focused', 'all']"
+                  :key="mode"
+                  class="scope-mode-chip"
+                  type="button"
+                  :class="{ active: selectedAgent.memoryScope.mode === mode }"
+                  @click="setScopeMode(selectedAgent, mode as MemoryScopeMode)"
+                >
+                  {{ mode === "none" ? "禁用" : mode === "all" ? "全量" : "定向" }}
+                </button>
               </div>
             </div>
-            <div class="tool-selected">
-              <span v-for="tool in agent.tools" :key="tool" class="tool-chip selected">
+
+            <div class="field-grid">
+              <label class="field">
+                <span>Scope 名称</span>
+                <input
+                  v-model="selectedAgent.memoryScope.label"
+                  class="field-input"
+                  type="text"
+                  placeholder="比如：工程上下文 / 长期偏好"
+                />
+              </label>
+              <label class="field">
+                <span>召回上限</span>
+                <ThemeSelect
+                  class="field-input"
+                  :model-value="selectedAgent.memoryScope.recallLimit"
+                  :options="recallLimitOptions"
+                  @update:model-value="(value) => updateRecallLimit(selectedAgent, value)"
+                />
+              </label>
+            </div>
+
+            <div class="field">
+              <span>知识目录</span>
+              <div class="folder-row">
+                <button
+                  v-for="folder in MEMORY_SCOPE_FOLDERS"
+                  :key="folder"
+                  class="folder-chip"
+                  type="button"
+                  :class="{
+                    active: selectedAgent.memoryScope.folders.includes(folder),
+                    disabled: selectedAgent.memoryScope.mode !== 'focused',
+                  }"
+                  @click="toggleFolder(selectedAgent, folder)"
+                >
+                  {{ MEMORY_SCOPE_FOLDER_LABELS[folder] }}
+                </button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>记忆策略说明</span>
+              <textarea
+                v-model="selectedAgent.memoryScope.notes"
+                rows="4"
+                class="field-input multiline"
+                placeholder="说明这个 agent 应该优先记住什么，避免什么噪音。"
+              />
+            </label>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-title">工具范围</div>
+            <div class="scope-summary tools-summary">
+              {{ selectedAgent.tools.length ? `${selectedAgent.tools.length} 个已绑定能力` : "未绑定能力，将只保留系统工具" }}
+            </div>
+
+            <div v-if="selectedAgent.tools.length" class="selected-tools">
+              <span v-for="tool in selectedAgent.tools" :key="tool" class="tool-pill selected">
                 {{ toolTitle(tool) }}
               </span>
             </div>
-          </div>
 
-          <div class="tool-grid">
-            <button
-              v-for="capability in toolCapabilities"
-              :key="capability.name"
-              class="tool-chip"
-              type="button"
-              :class="{ selected: agent.tools.includes(capability.name) }"
-              @click="toggleTool(agent, capability.name)"
-            >
-              <span class="tool-chip-title">{{ capability.title }}</span>
-              <span class="tool-chip-code">{{ capability.name }}</span>
-            </button>
-          </div>
-        </section>
-
-        <section class="tool-panel delegate-panel">
-          <div class="tool-head">
-            <div>
-              <div class="scope-title">委派推荐</div>
-              <div class="scope-summary">
-                {{
-                  agent.delegatable
-                    ? `允许委派 · 优先级 ${agent.delegatePriority}`
-                    : "当前不暴露给 agent_list"
-                }}
-              </div>
-            </div>
-            <div class="tool-selected">
-              <span v-for="tag in agent.delegateTags" :key="tag" class="tool-chip selected">
-                {{ tag }}
-              </span>
-            </div>
-          </div>
-
-          <div class="scope-grid">
-            <label class="field">
-              <span>推荐标签</span>
-              <input
-                class="field-input"
-                :value="tagText(agent)"
-                type="text"
-                placeholder="例如：代码, 修复, 构建, 测试"
-                @input="updateDelegateTags(agent, ($event.target as HTMLInputElement).value)"
-              />
-            </label>
-
-            <label class="field">
-              <span>推荐说明</span>
-              <input
-                v-model="agent.delegateNote"
-                class="field-input"
-                type="text"
-                placeholder="例如：适合前端修复、构建失败排查和代码落地"
-              />
-            </label>
-          </div>
-
-          <div class="scope-grid">
-            <label class="field">
-              <span>允许自动委派</span>
+            <div class="tool-grid">
               <button
-                class="toggle-btn"
+                v-for="capability in toolCapabilities"
+                :key="capability.name"
+                class="tool-pill"
                 type="button"
-                :class="{ active: agent.delegatable }"
-                @click="agent.delegatable = !agent.delegatable"
+                :class="{ selected: selectedAgent.tools.includes(capability.name) }"
+                @click="toggleTool(selectedAgent, capability.name)"
               >
-                {{ agent.delegatable ? "已允许" : "未允许" }}
+                <span class="tool-title">{{ capability.title }}</span>
+                <span class="tool-code">{{ capability.name }}</span>
               </button>
-            </label>
+            </div>
+          </section>
 
-            <label class="field">
-              <span>委派优先级</span>
-              <ThemeSelect
-                class="field-input"
-                :model-value="agent.delegatePriority"
-                :options="delegatePriorityOptions"
-                @update:model-value="(value) => agent.delegatePriority = Number(value)"
-              />
-            </label>
-          </div>
-        </section>
+          <section class="panel-card">
+            <div class="panel-title">委派设置</div>
+            <div class="field-grid">
+              <label class="field">
+                <span>推荐标签</span>
+                <input
+                  class="field-input"
+                  :value="tagText(selectedAgent)"
+                  type="text"
+                  placeholder="例如：代码, 构建, 测试"
+                  @input="updateDelegateTags(selectedAgent, ($event.target as HTMLInputElement).value)"
+                />
+              </label>
 
-        <div class="agent-id-row">
-          <span class="agent-id">{{ agent.id }}</span>
+              <label class="field">
+                <span>推荐说明</span>
+                <input
+                  v-model="selectedAgent.delegateNote"
+                  class="field-input"
+                  type="text"
+                  placeholder="说明何时应该把任务交给它"
+                />
+              </label>
+            </div>
+
+            <div class="field-grid">
+              <label class="field">
+                <span>允许自动委派</span>
+                <button
+                  class="toggle-btn"
+                  type="button"
+                  :class="{ active: selectedAgent.delegatable }"
+                  @click="selectedAgent.delegatable = !selectedAgent.delegatable"
+                >
+                  {{ selectedAgent.delegatable ? "已允许" : "未允许" }}
+                </button>
+              </label>
+
+              <label class="field">
+                <span>委派优先级</span>
+                <ThemeSelect
+                  class="field-input"
+                  :model-value="selectedAgent.delegatePriority"
+                  :options="delegatePriorityOptions"
+                  @update:model-value="(value) => updateDelegatePriority(selectedAgent, value)"
+                />
+              </label>
+            </div>
+          </section>
         </div>
-      </article>
+      </section>
+
+      <section v-else class="agent-detail empty-detail">
+        <div class="empty-copy">
+          <h3>还没有 Agent</h3>
+          <p>先新增一个 Agent，再单独编辑它的角色、记忆和工具范围。</p>
+        </div>
+      </section>
     </section>
 
     <ConfirmDialog
@@ -416,41 +488,39 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.agents-view {
+.agents-page {
   height: 100%;
   min-height: 0;
   overflow-y: auto;
-  padding: 28px 32px 40px;
+  padding: 28px 32px 36px;
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
 
 .page-head,
-.agent-top,
-.head-actions,
-.agent-actions,
+.page-actions,
+.detail-head,
+.detail-actions,
+.detail-title-row,
 .scope-head,
 .scope-mode-group,
-.two-col,
-.agent-name-row,
-.folder-row,
-.tool-head {
+.folder-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
 }
 
 .page-head,
-.agent-top,
-.scope-head,
-.tool-head {
+.detail-head,
+.scope-head {
   justify-content: space-between;
 }
 
 .page-title,
-.agent-name,
-.scope-title {
+.detail-title,
+.panel-title,
+.sidebar-title {
   margin: 0;
   color: var(--text-primary);
 }
@@ -460,51 +530,49 @@ onMounted(async () => {
 }
 
 .page-subtitle,
-.overview-note,
-.agent-role-preview,
+.sidebar-note,
+.detail-subtitle,
 .scope-summary {
   margin: 6px 0 0;
   color: var(--text-secondary);
-  line-height: 1.6;
   font-size: 13px;
+  line-height: 1.6;
 }
 
-.head-actions {
-  align-items: center;
-}
-
-.overview-grid {
+.summary-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
+  gap: 12px;
 }
 
-.overview-card,
-.agent-card,
-.scope-panel,
-.tool-panel {
-  border: 1px solid rgba(var(--accent-rgb), 0.14);
-  background: rgba(var(--surface-rgb), 0.68);
+.summary-card,
+.agent-sidebar,
+.agent-detail,
+.panel-card {
+  border: 1px solid var(--border-color);
   border-radius: 22px;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-surface);
 }
 
-.overview-card {
-  padding: 18px;
+.summary-card {
+  padding: 16px 18px;
 }
 
-.overview-label {
+.summary-label,
+.meta-key {
   display: block;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
-.overview-value {
+.summary-value {
   display: block;
   margin-top: 8px;
-  font-size: 18px;
   color: var(--text-primary);
+  font-size: 18px;
 }
 
 .sync-msg {
@@ -516,89 +584,103 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-.agent-list {
+.layout-shell {
+  min-height: 0;
   display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
   gap: 16px;
 }
 
-.agent-card {
-  padding: 18px;
+.agent-sidebar {
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
+  min-height: 0;
 }
 
-.agent-head-main {
-  min-width: 0;
+.sidebar-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  min-height: 0;
 }
 
-.agent-name-row {
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.agent-role-preview {
-  margin-top: 8px;
-}
-
-.head-pill,
-.agent-badge,
-.tool-chip,
-.small-btn,
-.primary-btn,
-.scope-mode-chip,
-.folder-chip {
-  border-radius: 999px;
-  border: 1px solid rgba(var(--accent-rgb), 0.18);
-  background: rgba(var(--accent-rgb), 0.08);
+.agent-row {
+  width: 100%;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid transparent;
+  background: var(--surface-2);
   color: var(--text-primary);
-}
-
-.agent-badge {
-  padding: 6px 10px;
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-
-.agent-badge.active,
-.tool-chip.selected,
-.scope-mode-chip.active,
-.folder-chip.active {
-  background: rgba(var(--accent-rgb), 0.18);
-  border-color: rgba(var(--accent-rgb), 0.32);
-}
-
-.agent-badge.subtle {
-  background: rgba(var(--surface-rgb), 0.62);
-  border-color: rgba(var(--border-rgb), 0.8);
-}
-
-.primary-btn,
-.small-btn,
-.scope-mode-chip,
-.folder-chip,
-.tool-chip {
+  text-align: left;
   cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
-.primary-btn {
-  padding: 10px 14px;
+.agent-row:hover,
+.agent-row.active {
+  border-color: rgba(var(--accent-rgb), 0.26);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.agent-row-top,
+.agent-row-meta,
+.selected-tools,
+.tool-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-row-top {
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agent-row-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agent-row-role,
+.agent-row-meta {
+  margin-top: 6px;
+  color: var(--text-secondary);
   font-size: 12px;
 }
 
-.small-btn {
-  padding: 8px 11px;
-  font-size: 11px;
-  font-family: var(--font-mono);
+.agent-row-meta {
+  color: var(--text-tertiary);
 }
 
-.small-btn.danger:disabled {
-  opacity: 0.45;
-  cursor: default;
+.agent-detail {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
 }
 
-.two-col,
-.scope-grid {
+.detail-title {
+  font-size: 20px;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.panel-card {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
@@ -617,9 +699,9 @@ onMounted(async () => {
 
 .field-input {
   width: 100%;
-  border-radius: 16px;
-  border: 1px solid rgba(var(--border-rgb), 0.9);
-  background: rgba(var(--surface-rgb), 0.78);
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-2);
   color: var(--text-primary);
   padding: 12px 14px;
   outline: none;
@@ -627,27 +709,8 @@ onMounted(async () => {
 }
 
 .field-input:focus {
-  border-color: rgba(var(--accent-rgb), 0.46);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.16);
-}
-
-.toggle-btn {
-  min-height: 44px;
-  border-radius: 16px;
-  border: 1px solid rgba(var(--border-rgb), 0.9);
-  background: rgba(var(--surface-rgb), 0.78);
-  color: var(--text-secondary);
-  padding: 0 14px;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 120ms ease, box-shadow 120ms ease, color 120ms ease;
-}
-
-.toggle-btn.active {
-  color: var(--text-primary);
-  border-color: rgba(var(--accent-rgb), 0.32);
+  border-color: rgba(var(--accent-rgb), 0.34);
   box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12);
-  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .multiline {
@@ -655,20 +718,74 @@ onMounted(async () => {
   min-height: 96px;
 }
 
-.scope-panel,
-.tool-panel {
-  padding: 16px;
+.meta-line {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
 }
 
-.folder-row,
-.tool-grid,
-.tool-selected {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+.meta-value {
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.row-pill,
+.detail-pill,
+.scope-mode-chip,
+.folder-chip,
+.tool-pill,
+.ghost-btn,
+.primary-btn {
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+
+.row-pill,
+.detail-pill {
+  padding: 5px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.row-pill.active,
+.detail-pill.active,
+.scope-mode-chip.active,
+.folder-chip.active,
+.tool-pill.selected {
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.primary-btn,
+.ghost-btn,
+.scope-mode-chip,
+.folder-chip,
+.tool-pill,
+.toggle-btn {
+  cursor: pointer;
+}
+
+.primary-btn {
+  padding: 10px 14px;
+  font-size: 12px;
+}
+
+.ghost-btn {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.ghost-btn.danger:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .folder-chip {
@@ -677,63 +794,88 @@ onMounted(async () => {
 }
 
 .folder-chip.disabled {
-  opacity: 0.52;
+  opacity: 0.5;
 }
 
-.folder-code,
-.tool-chip-code,
-.agent-id {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.tool-grid {
-  gap: 12px;
-}
-
-.tool-chip {
-  min-width: 170px;
+.tool-pill {
+  padding: 10px 12px;
   text-align: left;
-  padding: 12px 14px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
+  min-width: 148px;
 }
 
-.tool-chip-title {
+.tool-title {
   font-size: 12px;
 }
 
-.tool-selected {
-  justify-content: flex-end;
+.tool-code {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
 }
 
-.agent-id-row {
-  display: flex;
-  justify-content: flex-end;
+.tools-summary {
+  margin-top: -4px;
 }
 
-@media (max-width: 960px) {
-  .agents-view {
-    padding: 20px 18px 32px;
-  }
+.toggle-btn {
+  min-height: 44px;
+  border-radius: 14px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  padding: 0 14px;
+  text-align: left;
+}
 
-  .overview-grid,
-  .two-col,
-  .scope-grid {
+.toggle-btn.active {
+  color: var(--text-primary);
+  border-color: rgba(var(--accent-rgb), 0.3);
+  background: rgba(var(--accent-rgb), 0.12);
+}
+
+.empty-detail {
+  justify-content: center;
+  align-items: center;
+}
+
+.empty-copy {
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.empty-copy h3 {
+  margin: 0 0 8px;
+  color: var(--text-primary);
+}
+
+@media (max-width: 1080px) {
+  .layout-shell {
     grid-template-columns: 1fr;
   }
 
-  .page-head,
-  .agent-top,
-  .scope-head,
-  .tool-head {
-    flex-direction: column;
+  .agent-sidebar {
+    max-height: 260px;
   }
 
-  .tool-selected {
-    justify-content: flex-start;
+  .detail-grid,
+  .field-grid,
+  .summary-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .agents-page {
+    padding: 20px 18px 28px;
+  }
+
+  .page-head,
+  .detail-head,
+  .scope-head {
+    flex-direction: column;
   }
 }
 </style>

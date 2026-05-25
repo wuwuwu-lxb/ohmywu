@@ -362,6 +362,13 @@ pub fn tool_params(name: &str) -> Option<serde_json::Value> {
             "type": "object",
             "properties": {}
         })),
+        "action_get" => Some(serde_json::json!({
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "description": "Registered action id to load" }
+            },
+            "required": ["id"]
+        })),
         "action_register" => Some(serde_json::json!({
             "type": "object",
             "properties": {
@@ -563,6 +570,8 @@ pub async fn dispatch_tool(
         execute_capability_register(state, &params)
     } else if cap.implementation == "action_list" {
         execute_action_list(state)
+    } else if cap.implementation == "action_get" {
+        execute_action_get(state, &params)
     } else if cap.implementation == "action_register" {
         execute_action_register(state, &params)
     } else if cap.implementation == "agent_list" {
@@ -709,6 +718,11 @@ fn describe_target(cap: &str, params: &serde_json::Value) -> String {
             .unwrap_or("(no name)")
             .to_string(),
         "action_register" => params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no id)")
+            .to_string(),
+        "action_get" => params
             .get("id")
             .and_then(|v| v.as_str())
             .unwrap_or("(no id)")
@@ -934,6 +948,27 @@ fn execute_action_list(state: &AppState) -> Result<ExecOutput, String> {
     let views = catalog.list_views(&active_capabilities);
     let output = serde_json::to_string_pretty(&views)
         .map_err(|e| format!("Serialize actions: {}", e))?;
+    Ok(ExecOutput {
+        output: Some(output),
+        stderr: None,
+        exit_code: 0,
+    })
+}
+
+fn execute_action_get(state: &AppState, params: &serde_json::Value) -> Result<ExecOutput, String> {
+    let action_id = params
+        .get("id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "action_get 缺少 id".to_string())?;
+    let catalog = state
+        .action_catalog
+        .read()
+        .map_err(|e| format!("Lock: {}", e))?;
+    let blueprint = catalog.get_blueprint(action_id)?;
+    let output = serde_json::to_string_pretty(&blueprint)
+        .map_err(|e| format!("Serialize action blueprint: {}", e))?;
     Ok(ExecOutput {
         output: Some(output),
         stderr: None,

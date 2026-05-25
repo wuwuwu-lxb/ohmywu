@@ -125,6 +125,12 @@ const TOOL_META: Record<string, ToolMeta> = {
     detail: "读取当前 action 注册目录，包括 system action 和用户定义 action。",
     example: "查看 action 清单",
   },
+  action_get: {
+    label: "Action 蓝图读取",
+    short: "读取 action 的 blueprint",
+    detail: "只读取 action 的策略模板、capability 范围和来源信息，不执行任何真实操作。",
+    example: "读取 system.skill_to_action 的蓝图",
+  },
   action_register: {
     label: "Action 目录注册",
     short: "注册或更新 action",

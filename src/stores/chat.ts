@@ -154,6 +154,7 @@ const SYSTEM_AGENT_TOOLS = [
   "capability_list",
   "capability_register",
   "action_list",
+  "action_get",
   "action_register",
   "agent_list",
   "agent_delegate",
@@ -174,6 +175,18 @@ function normalizeExecStatus(status: string): ExecutionInfo["status"] {
     return status
   }
   return "failed"
+}
+
+function normalizeRuntimeTurnStatus(status: string): string {
+  switch (status) {
+    case "running":
+    case "completed":
+    case "cancelled":
+    case "failed":
+      return status
+    default:
+      return "running"
+  }
 }
 
 function formatDuration(durationMs: number): string {
@@ -451,9 +464,11 @@ export const useChatStore = defineStore("chat", () => {
             existing.input = typeof payload.inputPreview === "string" ? payload.inputPreview : existing.input
             existing.output = delegated
               ? undefined
-              : typeof payload.outputPreview === "string"
-                ? payload.outputPreview
-                : existing.output
+              : typeof payload.resultSummary === "string"
+                ? payload.resultSummary
+                : typeof payload.outputPreview === "string"
+                  ? payload.outputPreview
+                  : existing.output
             existing.artifactId = typeof payload.artifactId === "string" ? payload.artifactId : existing.artifactId
             existing.artifactPath = typeof payload.artifactPath === "string" ? payload.artifactPath : existing.artifactPath
             existing.verificationHint = typeof payload.verificationHint === "string" ? payload.verificationHint : existing.verificationHint
@@ -470,9 +485,11 @@ export const useChatStore = defineStore("chat", () => {
               input: typeof payload.inputPreview === "string" ? payload.inputPreview : undefined,
               output: delegated
                 ? undefined
-                : typeof payload.outputPreview === "string"
-                  ? payload.outputPreview
-                  : undefined,
+                : typeof payload.resultSummary === "string"
+                  ? payload.resultSummary
+                  : typeof payload.outputPreview === "string"
+                    ? payload.outputPreview
+                    : undefined,
               artifactId: typeof payload.artifactId === "string" ? payload.artifactId : undefined,
               artifactPath: typeof payload.artifactPath === "string" ? payload.artifactPath : undefined,
               verificationHint: typeof payload.verificationHint === "string" ? payload.verificationHint : undefined,
@@ -537,6 +554,10 @@ export const useChatStore = defineStore("chat", () => {
     runtimeTurns.value.sort((a, b) => a.startedAt.localeCompare(b.startedAt))
   }
 
+  function isTerminalRuntimeTurnStatus(status: string) {
+    return status === "completed" || status === "cancelled" || status === "failed"
+  }
+
   function handleRuntimeEvent(event: RuntimeEvent) {
     if (event.sessionId && event.sessionId !== currentSessionId.value) return
 
@@ -571,8 +592,19 @@ export const useChatStore = defineStore("chat", () => {
 
     if (event.turnId) {
       const existing = runtimeTurns.value.find((item) => item.id === event.turnId)
-      if (existing && event.kind === "turn.completed") {
-        existing.status = typeof event.status === "string" ? event.status : "completed"
+      if (
+        existing
+        && (event.kind === "turn.completed" || event.kind === "turn.cancelled" || event.kind === "turn.failed")
+      ) {
+        existing.status = normalizeRuntimeTurnStatus(
+          typeof event.status === "string"
+            ? event.status
+            : event.kind === "turn.cancelled"
+              ? "cancelled"
+              : event.kind === "turn.failed"
+                ? "failed"
+                : "completed"
+        )
         existing.finishedAt = event.timestamp || new Date().toISOString()
         const executionCount = event.payload?.executionCount
         if (typeof executionCount === "number") {
@@ -591,7 +623,7 @@ export const useChatStore = defineStore("chat", () => {
         if (event.payload?.delegated === true) {
           existing.delegated = true
         }
-        if (activeTurnId.value === event.turnId && !existing.parentTurnId) {
+        if (activeTurnId.value === event.turnId && !existing.parentTurnId && isTerminalRuntimeTurnStatus(existing.status)) {
           activeTurnId.value = null
         }
       }

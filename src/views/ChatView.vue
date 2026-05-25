@@ -7,6 +7,20 @@ import ThemeSelect from "../components/ThemeSelect.vue"
 import { useAgentStore } from "../stores/agents"
 import { useChatStore, type SessionSummary } from "../stores/chat"
 
+interface ActionReferenceOption {
+  id: string
+  title: string
+  description: string
+  enabled: boolean
+  available: boolean
+}
+
+interface MemoryReferenceOption {
+  slug: string
+  title: string
+  folder: string
+}
+
 const store = useChatStore()
 const agentStore = useAgentStore()
 const input = ref("")
@@ -25,6 +39,8 @@ const composing = ref(false)
 const slashIndex = ref(0)
 const llmProfiles = ref<Array<{ id: string; name: string; provider_type: string; model: string }>>([])
 const llmProviders = ref<Array<{ id: string; name: string }>>([])
+const actionReferences = ref<ActionReferenceOption[]>([])
+const memoryReferences = ref<MemoryReferenceOption[]>([])
 const deleteSessionTarget = computed(() =>
   store.sessions.find((session) => session.id === confirmingDeleteId.value) || null
 )
@@ -139,6 +155,51 @@ const agentOptions = computed(() =>
 
 const slashSuggestions = computed(() => {
   const raw = input.value.trimStart()
+  if (raw.startsWith("@")) {
+    const lower = raw.toLowerCase()
+
+    if (lower === "@" || lower === "@a" || lower === "@ac" || lower.startsWith("@action")) {
+      const query = raw.includes(":") ? raw.split(":").slice(1).join(":").trim().toLowerCase() : ""
+      return actionReferences.value
+        .filter((action) =>
+          action.enabled
+          && action.available
+          && (
+            !query
+            || action.id.toLowerCase().includes(query)
+            || action.title.toLowerCase().includes(query)
+          )
+        )
+        .slice(0, 8)
+        .map((action) => ({
+          label: `@action:${action.id}`,
+          description: action.title || action.description || "策略模板",
+          insert: `@action:${action.id} `,
+        }))
+    }
+
+    if (lower === "@m" || lower === "@me" || lower.startsWith("@memory")) {
+      const query = raw.includes(":") ? raw.split(":").slice(1).join(":").trim().toLowerCase() : ""
+      return memoryReferences.value
+        .filter((note) =>
+          !query
+          || note.slug.toLowerCase().includes(query)
+          || note.title.toLowerCase().includes(query)
+        )
+        .slice(0, 8)
+        .map((note) => ({
+          label: `@memory:${note.slug}`,
+          description: `${note.title} · ${note.folder}`,
+          insert: `@memory:${note.slug} `,
+        }))
+    }
+
+    return [
+      { label: "@action:", description: "引用一个 action 策略模板", insert: "@action:" },
+      { label: "@memory:", description: "引用一条知识库记忆", insert: "@memory:" },
+    ]
+  }
+
   if (!raw.startsWith("/")) return []
   const text = raw.slice(1)
   const [command = "", ...rest] = text.split(/\s+/)
@@ -208,6 +269,9 @@ const send = async () => {
   await store.sendMessage(text, effectiveAgent.value, agentStore.availableAgents)
   if (text.startsWith("/")) {
     await loadCommandContext()
+  }
+  if (text.includes("@action:") || text.includes("@memory:")) {
+    await loadReferenceContext()
   }
   syncInputHeight()
   scroll()
@@ -405,6 +469,19 @@ const confirmDeleteCurrentCategory = async () => {
   }
 }
 
+const loadReferenceContext = async () => {
+  try {
+    const [actions, notes] = await Promise.all([
+      invoke<ActionReferenceOption[]>("get_actions"),
+      invoke<MemoryReferenceOption[]>("wiki_list_notes"),
+    ])
+    actionReferences.value = actions || []
+    memoryReferences.value = notes || []
+  } catch (error) {
+    console.error("Load reference context:", error)
+  }
+}
+
 const applySlashSuggestion = (value?: string) => {
   if (!value) return
   input.value = value
@@ -455,6 +532,7 @@ onMounted(async () => {
   await agentStore.init()
   await store.init()
   await loadCommandContext()
+  await loadReferenceContext()
   await nextTick()
   syncInputHeight()
   if (store.panel === "conversation") {
@@ -618,7 +696,8 @@ onMounted(async () => {
               <div class="side-title">快速开始</div>
               <button class="hint" @click="input = '帮我看看当前目录有什么文件'">帮我看看当前目录有什么文件</button>
               <button class="hint" @click="input = '读取 README.md 并总结项目结构'">读取 README.md 并总结项目结构</button>
-              <button class="hint" @click="input = '检查我现在配置的模型是否可用'">检查我现在配置的模型是否可用</button>
+              <button class="hint" @click="input = '使用 @action:system.skill_to_action 帮我把一个 skill 转成 action'">引用一个 action 模板</button>
+              <button class="hint" @click="input = '结合 @memory:ohmywu-guide 帮我总结当前产品定位和使用路径'">引用一条知识记忆</button>
             </section>
           </div>
         </div>
@@ -689,7 +768,7 @@ onMounted(async () => {
               v-model="input"
               class="chat-input"
               rows="1"
-              placeholder="输入消息"
+              placeholder="输入消息，可用 / 命令、@action:action_id 或 @memory:slug 引用上下文"
               :disabled="store.pending"
               @input="handleInput"
               @focus="inputFocused = true"

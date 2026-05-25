@@ -92,7 +92,7 @@ const SYSTEM_ACTIONS: &[SystemActionSpec] = &[
         title: "Skill 转 Action",
         description: "内置系统技能。兼容外部 SKILL.md、prompt 型 skill 和 workflow 规范，帮助 AI 把它们转换成可运行的 action。",
         mode: "system_skill",
-        capabilities: &["read", "action_list", "action_register", "capability_list"],
+        capabilities: &["read", "action_list", "action_get", "action_register", "capability_list"],
         tags: &["system", "skill", "action", "compatibility"],
         prompt: ACTION_SPEC_PROMPT,
     },

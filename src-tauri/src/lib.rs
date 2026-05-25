@@ -47,6 +47,215 @@ use wechat_bridge::{
     WECHAT_BRIDGE_QR_PATH,
 };
 
+fn preview_action_prompt(prompt: &str, max_chars: usize) -> String {
+    let trimmed = prompt.trim();
+    let mut chars = trimmed.chars();
+    let preview = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{}...", preview)
+    } else {
+        preview
+    }
+}
+
+fn build_action_reference_block(blueprint: &ActionBlueprint) -> String {
+    let capabilities = if blueprint.capabilities.is_empty() {
+        "未声明 capability".to_string()
+    } else {
+        blueprint.capabilities.join(", ")
+    };
+    let tags = if blueprint.tags.is_empty() {
+        "无".to_string()
+    } else {
+        blueprint.tags.join(", ")
+    };
+    let files = if blueprint.supporting_files.is_empty() {
+        "无".to_string()
+    } else {
+        blueprint.supporting_files.join(", ")
+    };
+    let source_hint = blueprint.source_hint.as_deref().unwrap_or("无");
+    format!(
+        "## 引用 Action\n- id: {}\n- title: {}\n- source: {}\n- mode: {}\n- capabilities: {}\n- tags: {}\n- source_hint: {}\n- supporting_files: {}\n- prompt_preview: {}\n\n规则：这是策略模板，不代表真实执行。你应参考它来规划下一步，并继续调用真实 capability 完成任务。",
+        blueprint.id,
+        blueprint.title,
+        blueprint.source,
+        blueprint.mode,
+        capabilities,
+        tags,
+        source_hint,
+        files,
+        preview_action_prompt(&blueprint.compiled_prompt, 480),
+    )
+}
+
+fn preview_memory_body(body: &str, max_chars: usize) -> String {
+    let trimmed = body.trim();
+    let mut chars = trimmed.chars();
+    let preview = chars.by_ref().take(max_chars).collect::<String>();
+    if chars.next().is_some() {
+        format!("{}...", preview)
+    } else {
+        preview
+    }
+}
+
+fn build_memory_reference_block(note: &ohmywu_wiki::WikiNote) -> String {
+    let tags = if note.tags.is_empty() {
+        "无".to_string()
+    } else {
+        note.tags.join(", ")
+    };
+    format!(
+        "## 引用记忆\n- slug: {}\n- title: {}\n- folder: {}\n- tags: {}\n- updated: {}\n- body_preview: {}\n\n规则：这是用户知识库中的长期信息，可作为当前任务上下文参考；若任务依赖完整内容，应继续使用 wiki_read 或其他只读工具核对。",
+        note.slug,
+        note.title,
+        note.folder,
+        tags,
+        note.updated,
+        preview_memory_body(&note.body, 720),
+    )
+}
+
+struct InputReferenceResolution {
+    resolved_input: String,
+    action_ids: Vec<String>,
+    memory_slugs: Vec<String>,
+}
+
+fn inject_message_references(state: &AppState, input: &str) -> Result<InputReferenceResolution, String> {
+    let mut references = Vec::new();
+    let mut action_ids = Vec::new();
+    let mut memory_slugs = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for token in input.split_whitespace() {
+        if let Some(raw) = token.strip_prefix("@action:").or_else(|| token.strip_prefix("@a:")) {
+            let candidate = raw
+                .trim_matches(|ch: char| ch.is_ascii_punctuation() && ch != '.' && ch != '_' && ch != '-')
+                .trim();
+            if candidate.is_empty() || !seen.insert(format!("action:{candidate}")) {
+                continue;
+            }
+            let blueprint = state
+                .action_catalog
+                .read()
+                .map_err(|e| format!("Lock: {}", e))?
+                .get_blueprint(candidate)?;
+            action_ids.push(blueprint.id.clone());
+            references.push(build_action_reference_block(&blueprint));
+            continue;
+        }
+
+        if let Some(raw) = token.strip_prefix("@memory:").or_else(|| token.strip_prefix("@m:")) {
+            let candidate = raw
+                .trim_matches(|ch: char| ch.is_ascii_punctuation() && ch != '.' && ch != '_' && ch != '-')
+                .trim();
+            if candidate.is_empty() || !seen.insert(format!("memory:{candidate}")) {
+                continue;
+            }
+            let note = state
+                .wiki
+                .read()
+                .map_err(|e| format!("Lock: {}", e))?
+                .read_note(candidate)?;
+            memory_slugs.push(note.slug.clone());
+            references.push(build_memory_reference_block(&note));
+        }
+    }
+
+    if references.is_empty() {
+        return Ok(InputReferenceResolution {
+            resolved_input: input.to_string(),
+            action_ids,
+            memory_slugs,
+        });
+    }
+
+    Ok(InputReferenceResolution {
+        resolved_input: format!(
+            "{}\n\n{}",
+            input.trim_end(),
+            references.join("\n\n")
+        ),
+        action_ids,
+        memory_slugs,
+    })
+}
+
+fn emit_runtime_turn_finished(
+    state: &AppState,
+    app_handle: &tauri::AppHandle,
+    session_id: &str,
+    turn_id: &str,
+    response: &agent::AgentResponse,
+    parent_turn_id: Option<&str>,
+    delegated: bool,
+    agent_name: Option<&str>,
+) -> Result<(), String> {
+    let finished_turn = match response.runtime_status {
+        agent::AgentRuntimeStatus::Completed => state.runtime.finish_turn_completed(
+            session_id,
+            turn_id,
+            &response.content,
+            response.executions.len(),
+        )?,
+        agent::AgentRuntimeStatus::Cancelled => state.runtime.finish_turn_cancelled(
+            session_id,
+            turn_id,
+            &response.content,
+            response.executions.len(),
+        )?,
+        agent::AgentRuntimeStatus::Failed => state.runtime.finish_turn_failed(
+            session_id,
+            turn_id,
+            &response.content,
+            response.executions.len(),
+        )?,
+    };
+
+    let event_kind = match response.runtime_status {
+        agent::AgentRuntimeStatus::Completed => "turn.completed",
+        agent::AgentRuntimeStatus::Cancelled => "turn.cancelled",
+        agent::AgentRuntimeStatus::Failed => "turn.failed",
+    };
+    let event_summary = match response.runtime_status {
+        agent::AgentRuntimeStatus::Completed => format!(
+            "回合完成，执行 {} 个工具",
+            finished_turn.execution_count
+        ),
+        agent::AgentRuntimeStatus::Cancelled => format!(
+            "回合已中断，已执行 {} 个工具",
+            finished_turn.execution_count
+        ),
+        agent::AgentRuntimeStatus::Failed => format!(
+            "回合失败，执行 {} 个工具",
+            finished_turn.execution_count
+        ),
+    };
+
+    let _ = app_handle.emit(
+        "runtime-event",
+        serde_json::json!({
+            "sessionId": session_id,
+            "kind": event_kind,
+            "turnId": finished_turn.id,
+            "summary": event_summary,
+            "status": finished_turn.status,
+            "payload": {
+              "executionCount": finished_turn.execution_count,
+              "assistantContent": response.content,
+              "parentTurnId": parent_turn_id,
+              "delegated": delegated,
+              "agentName": agent_name,
+            },
+            "timestamp": finished_turn.finished_at,
+        }),
+    );
+
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub capabilities: Arc<CapabilityRegistry>,
@@ -629,6 +838,8 @@ async fn process_message(
 ) -> Result<SessionMessage, String> {
     state.cancel_token.store(false, Ordering::SeqCst);
     state.set_app_handle(app_handle.clone());
+    let references = inject_message_references(state, content)?;
+    let resolved_content = references.resolved_input.clone();
 
     let now = chrono_now();
     let mut known_profiles = agent_profiles.unwrap_or_default();
@@ -662,6 +873,34 @@ async fn process_message(
         }),
     );
 
+    if !references.action_ids.is_empty()
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(&turn.id),
+            "action.references.injected",
+            &format!("注入 {} 个 action 模板", references.action_ids.len()),
+            serde_json::json!({
+                "actionIds": references.action_ids,
+            }),
+        )
+    {
+        let _ = app_handle.emit("runtime-event", &event);
+    }
+
+    if !references.memory_slugs.is_empty()
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(&turn.id),
+            "memory.references.injected",
+            &format!("注入 {} 条知识记忆", references.memory_slugs.len()),
+            serde_json::json!({
+                "memorySlugs": references.memory_slugs,
+            }),
+        )
+    {
+        let _ = app_handle.emit("runtime-event", &event);
+    }
+
     // save user message
     let user_msg = SessionMessage {
         role: "user".into(),
@@ -676,7 +915,7 @@ async fn process_message(
     };
     state.session.append_message(session_id, &user_msg)?;
 
-    let command_response = handle_slash_command(state, content)?;
+    let command_response = handle_slash_command(state, &resolved_content)?;
 
     let llm_config = {
         let cfg_guard = state.config.read().map_err(|e| format!("Lock: {}", e))?;
@@ -690,7 +929,7 @@ async fn process_message(
             state,
             session_id,
             &turn.id,
-            content,
+            &resolved_content,
             agent_profile.as_ref(),
             &llm_config,
             Some(app_handle),
@@ -711,9 +950,10 @@ async fn process_message(
                 reasoning_content: None,
                 executions: vec![],
                 task_id: None,
+                runtime_status: agent::AgentRuntimeStatus::Failed,
             }
         })
-    } else if let Some(path) = parse_read_cmd(content) {
+    } else if let Some(path) = parse_read_cmd(&resolved_content) {
         let req = tools::ExecuteRequest {
             capability: "read".into(),
             params: serde_json::json!({ "path": path }),
@@ -742,8 +982,13 @@ async fn process_message(
                 duration_ms: result.duration_ms,
             }],
             task_id: Some(result.task_id),
+            runtime_status: if result.status == "success" {
+                agent::AgentRuntimeStatus::Completed
+            } else {
+                agent::AgentRuntimeStatus::Failed
+            },
         }
-    } else if let Some(cmd) = parse_run_cmd(content) {
+    } else if let Some(cmd) = parse_run_cmd(&resolved_content) {
         let req = tools::ExecuteRequest {
             capability: "bash".into(),
             params: serde_json::json!({ "command": cmd }),
@@ -775,6 +1020,11 @@ async fn process_message(
                 duration_ms: result.duration_ms,
             }],
             task_id: Some(result.task_id),
+            runtime_status: if result.status == "success" {
+                agent::AgentRuntimeStatus::Completed
+            } else {
+                agent::AgentRuntimeStatus::Failed
+            },
         }
     } else {
         let reply = format!(
@@ -786,32 +1036,22 @@ async fn process_message(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         }
     };
 
     let agent_msg = agent::build_agent_message(&agent_response, &turn.id, agent_profile.as_ref());
     state.session.append_message(session_id, &agent_msg)?;
-    let completed_turn = state.runtime.finish_turn(
+    emit_runtime_turn_finished(
+        state,
+        app_handle,
         session_id,
         &turn.id,
-        &agent_response.content,
-        agent_response.executions.len(),
+        &agent_response,
+        None,
+        false,
+        agent_profile.as_ref().map(|profile| profile.name.as_str()),
     )?;
-    let _ = app_handle.emit(
-        "runtime-event",
-        serde_json::json!({
-            "sessionId": session_id,
-            "kind": "turn.completed",
-            "turnId": completed_turn.id,
-            "summary": format!("回合完成，执行 {} 个工具", completed_turn.execution_count),
-            "status": completed_turn.status,
-            "payload": {
-              "executionCount": completed_turn.execution_count,
-              "assistantContent": agent_response.content,
-            },
-            "timestamp": completed_turn.finished_at,
-        }),
-    );
 
     if emit_session_update {
         let _ = app_handle.emit(
@@ -1224,6 +1464,7 @@ fn handle_slash_command(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         })),
         "profiles" => {
             let config = state.config.read().map_err(|e| format!("Lock: {}", e))?;
@@ -1234,6 +1475,7 @@ fn handle_slash_command(
                     reasoning_content: None,
                     executions: vec![],
                     task_id: None,
+                    runtime_status: agent::AgentRuntimeStatus::Completed,
                 }));
             }
             let mut lines = vec!["当前模型配置：".to_string()];
@@ -1253,6 +1495,7 @@ fn handle_slash_command(
                 reasoning_content: None,
                 executions: vec![],
                 task_id: None,
+                runtime_status: agent::AgentRuntimeStatus::Completed,
             }))
         }
         "profile" => Ok(Some(switch_llm_profile(state, args)?)),
@@ -1263,6 +1506,7 @@ fn handle_slash_command(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         })),
     }
 }
@@ -1291,6 +1535,7 @@ fn switch_llm_profile(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         });
     }
 
@@ -1301,6 +1546,7 @@ fn switch_llm_profile(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         });
     }
 
@@ -1319,6 +1565,7 @@ fn switch_llm_profile(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         });
     };
 
@@ -1330,6 +1577,7 @@ fn switch_llm_profile(
         reasoning_content: None,
         executions: vec![],
         task_id: None,
+        runtime_status: agent::AgentRuntimeStatus::Completed,
     })
 }
 
@@ -1384,6 +1632,7 @@ fn update_active_llm_profile(
             reasoning_content: None,
             executions: vec![],
             task_id: None,
+            runtime_status: agent::AgentRuntimeStatus::Completed,
         });
     }
 
@@ -1424,6 +1673,7 @@ fn update_active_llm_profile(
         reasoning_content: None,
         executions: vec![],
         task_id: None,
+        runtime_status: agent::AgentRuntimeStatus::Completed,
     })
 }
 

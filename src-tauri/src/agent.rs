@@ -72,6 +72,7 @@ const SYSTEM_PROMPT: &str = "\
 7. 工具摘要不等于完整结果。只要看到 `artifact_id` 或 `artifact_path`，就代表当前只拿到了摘要入口，不代表你已经知道完整输出。
 8. 当任务依赖完整输出、后续片段、精确比对、逐段分析时，优先调用 `artifact_read`，不要基于摘要猜测完整内容。
 9. 对可能改变真实环境的操作，优先区分“执行”和“验证”两步。写入后用只读工具复核，避免把预期结果当成已验证事实。
+10. action 只是策略模板或 skill 包装，不代表真实执行。若要使用 action，先通过 `action_get` 读取 blueprint，再拆成真实 capability 调用；真正可验证的仍然只有底层工具结果。
 ";
 
 const MAX_ITERATIONS: usize = 48;
@@ -84,11 +85,24 @@ pub struct AgentResponse {
     pub reasoning_content: Option<String>,
     pub executions: Vec<ExecutionRecord>,
     pub task_id: Option<String>,
+    pub runtime_status: AgentRuntimeStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentRuntimeStatus {
+    Completed,
+    Cancelled,
+    Failed,
 }
 
 struct ExecutionContext {
     fact_count: usize,
     facts: Vec<ExecutionFact>,
+    text: String,
+}
+
+struct RecentToolReceiptContext {
+    receipt_count: usize,
     text: String,
 }
 
@@ -166,6 +180,7 @@ pub async fn agent_loop(
     let mut last_task_id: Option<String> = None;
     let memory_context = build_memory_context(state, agent_profile, user_message);
     let task_state_context = build_task_state_context(&history, turn_id);
+    let recent_tool_receipts = build_recent_tool_receipt_context(&history);
     let execution_context = build_execution_context(&history);
     let compression_context = build_compression_context(&compactions);
     let history_window = history
@@ -213,6 +228,22 @@ pub async fn agent_loop(
     }
 
     if let Some(handle) = app_handle
+        && let Some(recent_receipts) = &recent_tool_receipts
+        && let Ok(event) = state.runtime.record_event(
+            session_id,
+            Some(turn_id),
+            "tool.receipts.recalled",
+            &format!("注入 {} 条最近工具回执", recent_receipts.receipt_count),
+            serde_json::json!({
+                "receiptCount": recent_receipts.receipt_count,
+                "preview": preview_text(&recent_receipts.text, 1200),
+            }),
+        )
+    {
+        let _ = handle.emit("runtime-event", &event);
+    }
+
+    if let Some(handle) = app_handle
         && let Some(execution) = &execution_context
         && let Ok(event) = state.runtime.record_event(
             session_id,
@@ -253,6 +284,7 @@ pub async fn agent_loop(
         agent_profile,
         memory_context.as_ref(),
         task_state_context.as_ref(),
+        recent_tool_receipts.as_ref(),
         execution_context.as_ref(),
         compression_context.as_ref(),
     )));
@@ -281,6 +313,7 @@ pub async fn agent_loop(
                 &history_window,
                 memory_context.as_ref(),
                 task_state_context.as_ref(),
+                recent_tool_receipts.as_ref(),
                 execution_context.as_ref(),
                 compression_context.as_ref(),
                 tools.len(),
@@ -301,6 +334,7 @@ pub async fn agent_loop(
                 reasoning_content: None,
                 executions,
                 task_id: last_task_id,
+                runtime_status: AgentRuntimeStatus::Cancelled,
             });
         }
 
@@ -342,6 +376,7 @@ pub async fn agent_loop(
                 reasoning_content: response.reasoning_content,
                 executions,
                 task_id: last_task_id,
+                runtime_status: AgentRuntimeStatus::Completed,
             });
         }
 
@@ -487,6 +522,7 @@ pub async fn agent_loop(
                         "toolCallId": tc_id,
                         "inputPreview": preview_text(input, 256),
                         "outputPreview": preview_text(result.output.as_deref().unwrap_or(""), 512),
+                        "resultSummary": tool_result,
                         "artifactId": result.artifact_id,
                         "artifactPath": result.artifact_path,
                         "verificationHint": verification_hint,
@@ -527,6 +563,7 @@ pub async fn agent_loop(
         reasoning_content: None,
         executions,
         task_id: last_task_id,
+        runtime_status: AgentRuntimeStatus::Completed,
     })
 }
 
@@ -629,6 +666,7 @@ fn build_system_prompt(
     agent_profile: Option<&AgentInvocationProfile>,
     memory_context: Option<&MemoryContext>,
     task_state_context: Option<&TaskStateContext>,
+    recent_tool_receipts: Option<&RecentToolReceiptContext>,
     execution_context: Option<&ExecutionContext>,
     compression_context: Option<&CompressionContext>,
 ) -> String {
@@ -672,6 +710,12 @@ fn build_system_prompt(
             task_state.text
         )
     });
+    let recent_receipt_note = recent_tool_receipts.map(|context| {
+        format!(
+            "## 最近工具真实回执\n{}\n\n这是最近几次真实工具执行的直接回执。优先依据这些回执判断刚刚发生了什么、哪些操作真的执行了、哪些还需要 `artifact_read` 或二次验证。",
+            context.text
+        )
+    });
     let execution_note = execution_context.map(|execution| {
         format!(
             "## 最近已验证执行事实\n{}\n\n这些事实来自最近真实工具执行结果。除非有新的工具结果推翻它们，否则不要忽略、改写或凭空假设不同状态。若某条事实附带 artifact 引用，说明你仍可继续调用 `artifact_read` 查看完整结果，而不应只依赖摘要。",
@@ -685,7 +729,7 @@ fn build_system_prompt(
         )
     });
 
-    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note, task_state_note, execution_note, compression_note]
+    [Some(SYSTEM_PROMPT.to_string()), tool_note, Some(mode_note.to_string()), agent_note, memory_note, task_state_note, recent_receipt_note, execution_note, compression_note]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>()
@@ -718,6 +762,7 @@ fn build_context_prepared(
     history_window: &[SessionMessage],
     memory_context: Option<&MemoryContext>,
     task_state_context: Option<&TaskStateContext>,
+    recent_tool_receipts: Option<&RecentToolReceiptContext>,
     execution_context: Option<&ExecutionContext>,
     compression_context: Option<&CompressionContext>,
     tool_count: usize,
@@ -758,6 +803,9 @@ fn build_context_prepared(
     }
     if task_state_context.is_some() {
         sources.push("task_state".to_string());
+    }
+    if recent_tool_receipts.is_some_and(|context| context.receipt_count > 0) {
+        sources.push("recent_tool_receipts".to_string());
     }
     if execution_fact_count > 0 {
         sources.push("execution_facts".to_string());
@@ -1161,6 +1209,40 @@ fn build_execution_context(messages: &[SessionMessage]) -> Option<ExecutionConte
     })
 }
 
+fn build_recent_tool_receipt_context(messages: &[SessionMessage]) -> Option<RecentToolReceiptContext> {
+    let receipts = messages
+        .iter()
+        .rev()
+        .filter(|msg| msg.role == "agent")
+        .filter_map(|msg| {
+            let trimmed = msg.content.trim();
+            if trimmed.starts_with("# TOOL_EXECUTION_RECEIPT") {
+                Some(trimmed.to_string())
+            } else {
+                None
+            }
+        })
+        .take(4)
+        .collect::<Vec<_>>();
+
+    if receipts.is_empty() {
+        return None;
+    }
+
+    let mut ordered = receipts;
+    ordered.reverse();
+
+    Some(RecentToolReceiptContext {
+        receipt_count: ordered.len(),
+        text: ordered
+            .into_iter()
+            .enumerate()
+            .map(|(index, receipt)| format!("### 回执 {}\n{}", index + 1, receipt))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    })
+}
+
 fn extract_execution_facts(execution: &ExecutionRecord) -> Vec<ExecutionFact> {
     let capability = execution.capability.trim().to_string();
     let input = execution.input.trim();
@@ -1528,19 +1610,45 @@ pub async fn delegate_to_agent(
     .map_err(|err| format!("子 Agent 调用失败: {}", err))?;
 
     if let Some(handle) = app_handle.as_ref() {
-        let completed_turn = state.runtime.finish_turn(
-            session_id,
-            &child_turn_id,
-            &result.content,
-            result.executions.len(),
-        )?;
+        let (event_kind, event_summary, completed_turn) = match result.runtime_status {
+            AgentRuntimeStatus::Completed => (
+                "turn.completed",
+                format!("子 Agent 完成：{}", target_profile.name),
+                state.runtime.finish_turn_completed(
+                    session_id,
+                    &child_turn_id,
+                    &result.content,
+                    result.executions.len(),
+                )?,
+            ),
+            AgentRuntimeStatus::Cancelled => (
+                "turn.cancelled",
+                format!("子 Agent 已中断：{}", target_profile.name),
+                state.runtime.finish_turn_cancelled(
+                    session_id,
+                    &child_turn_id,
+                    &result.content,
+                    result.executions.len(),
+                )?,
+            ),
+            AgentRuntimeStatus::Failed => (
+                "turn.failed",
+                format!("子 Agent 失败：{}", target_profile.name),
+                state.runtime.finish_turn_failed(
+                    session_id,
+                    &child_turn_id,
+                    &result.content,
+                    result.executions.len(),
+                )?,
+            ),
+        };
         let _ = handle.emit(
             "runtime-event",
             serde_json::json!({
                 "sessionId": session_id,
-                "kind": "turn.completed",
+                "kind": event_kind,
                 "turnId": completed_turn.id,
-                "summary": format!("子 Agent 完成：{}", target_profile.name),
+                "summary": event_summary,
                 "status": completed_turn.status,
                 "payload": {
                     "executionCount": completed_turn.execution_count,
