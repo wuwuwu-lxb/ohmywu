@@ -21,3 +21,7 @@ Thumbs.db
 
 # Tauri
 src-tauri/gen/
+
+# AppImage helper extraction
+target/appimage-tools/
+squashfs-root/

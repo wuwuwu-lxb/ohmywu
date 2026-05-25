@@ -32,6 +32,11 @@
 
 - `Ubuntu 22.04`
 
+更推荐的长期做法：
+
+- 统一走容器化构建
+- 说明文档见 `book/container-packaging.md`
+
 不要在过新的桌面发行版上直接构建后再拿去给旧系统跑，否则容易遇到：
 
 - `glibc` 版本过高
@@ -41,7 +46,8 @@
 ## 5. 本地构建发布包
 
 ```bash
-npm run tauri build
+npm run build:appimage
+npm run tauri build --bundles deb,rpm --ci
 ```
 
 常见产物目录：
@@ -55,6 +61,11 @@ npm run tauri build
 - `AppImage`
 - `deb`
 - `rpm`
+
+说明：
+
+- `AppImage` 优先使用 `npm run build:appimage`
+- `deb` / `rpm` 继续由 `tauri build` 产出
 
 ## 6. Arch / pacman 体系
 

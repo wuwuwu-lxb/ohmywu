@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
+    "build:appimage": "bash scripts/build-appimage.sh",
     "preview": "vite preview",
     "tauri": "tauri"
   },

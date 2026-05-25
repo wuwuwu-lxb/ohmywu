@@ -214,9 +214,26 @@ Action 现在不再只是一个概念标签，而是结构化注册项，包含�
 ```bash
 npm install
 npm run build
+npm run build:appimage
 cargo check
 cargo test
 ```
+
+### Linux 打包
+
+当前 AppImage 推荐走仓库脚本：
+
+```bash
+npm run build:appimage
+```
+
+产物位置：
+
+- `target/release/bundle/appimage/OhMyWu_*.AppImage`
+
+正式发布的统一容器化路径见：
+
+- `book/container-packaging.md`
 
 ### 当前验证基线
 
