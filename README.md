@@ -235,6 +235,28 @@ npm run build:appimage
 
 - `book/container-packaging.md`
 
+### Arch Linux
+
+当前支持两种 Arch 安装方式。
+
+1. 直接安装已经构建好的包：
+
+```bash
+sudo pacman -U packaging/arch/ohmywu-0.25.0-1-x86_64.pkg.tar.zst
+```
+
+2. 用 Docker 在 Arch 容器里重新生成包：
+
+```bash
+sudo bash scripts/build-arch-package-docker.sh
+```
+
+相关文件：
+
+- `packaging/arch/PKGBUILD`
+- `packaging/arch/Dockerfile`
+- `scripts/build-arch-package-docker.sh`
+
 ### 当前验证基线
 
 在当前阶段，至少应关注：

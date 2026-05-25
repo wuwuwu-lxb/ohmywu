@@ -76,11 +76,24 @@ Arch 侧建议做法：
 - 仓库内维护 `PKGBUILD`
 - 发布时同步更新 `pkgver`
 - 用户可用 `makepkg -si`
+- 当前也支持用 Docker 构建二进制 Arch 包
 - 如果后续要进 AUR，再补 `.SRCINFO`
 
 当前建议文件位置：
 
 - `packaging/arch/PKGBUILD`
+- `packaging/arch/Dockerfile`
+- `scripts/build-arch-package-docker.sh`
+
+当前可用命令：
+
+```bash
+sudo bash scripts/build-arch-package-docker.sh
+```
+
+当前产物：
+
+- `packaging/arch/ohmywu-0.25.0-1-x86_64.pkg.tar.zst`
 
 ## 7. Git 发布步骤
 
@@ -100,6 +113,7 @@ git push origin v0.25.0
    - `bundle/appimage/` 下的 AppImage
    - `bundle/deb/` 下的 `.deb`
    - `bundle/rpm/` 下的 `.rpm`
+   - `packaging/arch/` 下的 `.pkg.tar.zst`
 3. 附带上传：
    - `packaging/arch/PKGBUILD`
 4. release note 里注明：

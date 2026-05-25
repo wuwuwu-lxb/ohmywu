@@ -133,18 +133,50 @@ npm run build:appimage
 建议以后统一按下面顺序：
 
 1. 先在容器内构建 `AppImage`
+2. 再构建 Arch `pkg.tar.zst`
 2. 再构建 `deb`
 3. 再构建 `rpm`
 4. 最后校验文件大小、`file` 输出和可执行权限
 
-## 11. 产物检查
+## 11. Arch 容器打包
+
+当前仓库已经补了一条 Arch 二进制包容器化路径：
+
+- `packaging/arch/Dockerfile`
+- `scripts/build-arch-package-docker.sh`
+
+用法：
+
+```bash
+sudo bash scripts/build-arch-package-docker.sh
+```
+
+这条链路的目标不是“在容器里重新完整编译整个项目”，而是：
+
+1. 复用当前已经生成的 `target/release/ohmywu`
+2. 复制图标到 `packaging/arch/`
+3. 在 Arch 容器内运行 `makepkg`
+4. 生成 `packaging/arch/*.pkg.tar.zst`
+
+当前生成的包可直接安装：
+
+```bash
+sudo pacman -U packaging/arch/ohmywu-0.25.0-1-x86_64.pkg.tar.zst
+```
+
+## 12. 产物检查
 
 ```bash
 ls -lh target/release/bundle/appimage/
 file target/release/bundle/appimage/*.AppImage
 ```
 
-## 12. 后续建议
+```bash
+ls -lh packaging/arch/*.pkg.tar.zst
+file packaging/arch/*.pkg.tar.zst
+```
+
+## 13. 后续建议
 
 下一步最好补两样东西：
 

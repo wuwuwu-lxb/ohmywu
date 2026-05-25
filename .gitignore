@@ -25,3 +25,11 @@ src-tauri/gen/
 # AppImage helper extraction
 target/appimage-tools/
 squashfs-root/
+
+# Arch packaging outputs / staging
+packaging/arch/*.pkg.tar.zst
+packaging/arch/*.tar.gz
+packaging/arch/ohmywu-bin
+packaging/arch/ohmywu-128x128.png
+packaging/arch/pkg/
+packaging/arch/src/

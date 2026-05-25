@@ -1,0 +1,8 @@
+.git
+.agents
+.codex
+node_modules
+target
+dist
+packaging/arch/pkg
+packaging/arch/src
