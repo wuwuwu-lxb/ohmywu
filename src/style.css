@@ -6,19 +6,25 @@
 :root {
   --accent: #3b82f6;
   --accent-rgb: 59, 130, 246;
-  --accent-soft: rgba(var(--accent-rgb), 0.10);
-  --accent-glow: rgba(var(--accent-rgb), 0.18);
+  --accent-soft: rgba(var(--accent-rgb), 0.12);
+  --accent-glow: rgba(var(--accent-rgb), 0.08);
 
-  --surface-alpha: 0.22;
-  --surface-bg: rgba(10, 12, 16, 0.58);
-  --surface-1: rgba(255, 255, 255, 0.02);
-  --surface-2: rgba(255, 255, 255, 0.03);
-  --surface-3: rgba(255, 255, 255, 0.04);
-  --border-color: rgba(255, 255, 255, 0.06);
-  --border-hover: rgba(255, 255, 255, 0.10);
-  --shell-border: rgba(255, 255, 255, 0.08);
-  --hover-bg: rgba(255, 255, 255, 0.03);
-  --active-bg: rgba(var(--accent-rgb), 0.10);
+  --surface-rgb: 16, 20, 28;
+  --border-rgb: 255, 255, 255;
+  --surface-alpha: 0.18;
+  --surface-bg: rgba(var(--surface-rgb), 0.62);
+  --surface-1: rgba(255, 255, 255, 0.028);
+  --surface-2: rgba(255, 255, 255, 0.048);
+  --surface-3: rgba(255, 255, 255, 0.068);
+  --border-color: rgba(var(--border-rgb), 0.055);
+  --border-hover: rgba(var(--border-rgb), 0.11);
+  --shell-border: rgba(var(--border-rgb), 0.07);
+  --hover-bg: rgba(255, 255, 255, 0.035);
+  --active-bg: rgba(var(--accent-rgb), 0.085);
+  --control-bg: rgba(255, 255, 255, 0.045);
+  --control-bg-focus: rgba(255, 255, 255, 0.065);
+  --focus-ring: 0 0 0 1px rgba(var(--accent-rgb), 0.28);
+  --panel-bg: var(--surface-1);
 
   --text-primary: #eaeaf2;
   --text-secondary: #a7abbb;
@@ -39,9 +45,9 @@
   --radius-lg: 12px;
   --radius-xl: 16px;
 
-  --shadow-surface: 0 8px 18px rgba(0, 0, 0, 0.12);
-  --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.18);
-  --shadow-glow: 0 0 20px var(--accent-glow);
+  --shadow-surface: none;
+  --shadow-float: 0 12px 28px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 0 1px var(--accent-glow);
 
   --font: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-mono: "SFMono-Regular", "Cascadia Mono", "JetBrains Mono", "Consolas", monospace;
@@ -67,7 +73,7 @@
   --bg-blur: 0px;
   --bg-mask: 0.3;
   --bg-image-url: none;
-  --shell-blur: 20px;
+  --shell-blur: 0px;
 }
 
 /* ── Reset ────────────────────────────────────────────────────── */
@@ -104,7 +110,7 @@ optgroup {
 }
 
 select {
-  background-color: rgba(15, 19, 27, 0.96);
+  background-color: rgba(15, 19, 27, 0.98);
   color: var(--text-primary);
 }
 
@@ -127,7 +133,18 @@ select option:checked {
 * { scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.08) transparent; }
 
 /* ── Selection ── */
-::selection { background: var(--accent-soft); color: var(--text-primary); }
+::selection {
+  background: rgba(var(--accent-rgb), 0.44);
+  color: #ffffff;
+}
+
+input::selection,
+textarea::selection,
+pre::selection,
+code::selection {
+  background: rgba(var(--accent-rgb), 0.52);
+  color: #ffffff;
+}
 
 /* ── Focus ── */
 :focus-visible {
@@ -148,4 +165,17 @@ pre {
   overflow-x: auto;
   line-height: 1.55;
   color: var(--text-secondary);
+}
+
+input,
+textarea,
+select,
+button {
+  accent-color: var(--accent);
+}
+
+input,
+textarea,
+select {
+  caret-color: var(--accent);
 }

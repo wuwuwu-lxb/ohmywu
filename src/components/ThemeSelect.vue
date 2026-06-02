@@ -291,12 +291,12 @@ watch(open, async (value) => {
   border-radius: 16px;
   border: 1px solid rgba(var(--accent-rgb), 0.16);
   background: rgba(14, 18, 26, 0.98);
-  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.34);
+  box-shadow: var(--shadow-float);
   overscroll-behavior: contain;
 }
 
 .theme-select-menu.upward {
-  box-shadow: 0 -18px 36px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--shadow-float);
 }
 
 .theme-select-option {
@@ -312,7 +312,7 @@ watch(open, async (value) => {
   display: flex;
   align-items: center;
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .theme-select-option:hover,

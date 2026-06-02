@@ -89,11 +89,11 @@ const iconMap = computed<Record<string, string>>(() => ({
   flex-direction: column;
   width: var(--sidebar-w);
   min-width: 0;
-  background: var(--shell-bg);
+  background: var(--shell-bg-soft);
   border-right: 1px solid var(--border-color);
   transition: width var(--duration-normal) var(--ease-in-out), background 0.3s ease;
   overflow: hidden;
-  box-shadow: inset -1px 0 0 rgba(255, 255, 255, 0.02);
+  box-shadow: none;
 }
 
 .sidebar.collapsed {
@@ -125,9 +125,9 @@ const iconMap = computed<Record<string, string>>(() => ({
   align-items: center;
   justify-content: center;
   border-radius: 10px;
-  background: rgba(var(--accent-rgb), 0.18);
-  border: 1px solid rgba(var(--accent-rgb), 0.24);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), var(--shadow-glow);
+  background: rgba(var(--accent-rgb), 0.12);
+  border: 1px solid rgba(var(--accent-rgb), 0.2);
+  box-shadow: none;
   color: #f4f6ff;
   font-size: 13px;
 }
@@ -152,7 +152,7 @@ const iconMap = computed<Record<string, string>>(() => ({
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .toggle-btn:hover {
@@ -185,7 +185,7 @@ const iconMap = computed<Record<string, string>>(() => ({
   font-weight: 500;
   cursor: pointer;
   text-align: left;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
   position: relative;
 }
 
@@ -208,7 +208,7 @@ const iconMap = computed<Record<string, string>>(() => ({
   bottom: 8px;
   width: 4px;
   border-radius: 0 4px 4px 0;
-  background: rgba(var(--accent-rgb), 0.9);
+  background: rgba(var(--accent-rgb), 0.68);
 }
 
 .nav-icon {
@@ -231,7 +231,7 @@ const iconMap = computed<Record<string, string>>(() => ({
 }
 
 .nav-badge {
-  background: rgba(var(--accent-rgb), 0.88);
+  background: rgba(var(--accent-rgb), 0.72);
   color: var(--text-on-accent);
   font-size: 10px;
   font-weight: 600;

@@ -1218,8 +1218,8 @@ onMounted(async () => {
 .empty-side-card {
   border: 1px solid var(--border-color);
   border-radius: 24px;
-  background: var(--surface-1);
-  box-shadow: var(--shadow-float);
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-surface);
 }
 
 .empty-main-card {
@@ -1238,7 +1238,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: var(--shadow-glow);
+  box-shadow: none;
   position: relative;
   overflow: hidden;
 }
@@ -1374,7 +1374,7 @@ onMounted(async () => {
   background: rgba(var(--accent-rgb), 0.16);
   border: 1px solid rgba(var(--accent-rgb), 0.18);
   color: #fff;
-  box-shadow: var(--shadow-glow);
+  box-shadow: none;
   flex-shrink: 0;
 }
 
@@ -1557,33 +1557,15 @@ onMounted(async () => {
   padding: 10px 12px;
   border-radius: 22px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--control-bg);
   box-shadow: var(--shadow-surface);
   transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out);
 }
 
 .input-wrapper.focused {
-  border-color: rgba(var(--accent-rgb), 0.34);
-  background: rgba(var(--accent-rgb), 0.05);
-  box-shadow:
-    var(--shadow-surface),
-    0 0 0 1px rgba(var(--accent-rgb), 0.16),
-    0 0 0 4px rgba(var(--accent-rgb), 0.08);
-}
-
-.input-wrapper::after {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: 22px;
-  pointer-events: none;
-  opacity: 0;
-  background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.18), transparent 45%, rgba(var(--accent-rgb), 0.12));
-  transition: opacity 180ms ease;
-}
-
-.input-wrapper.focused::after {
-  opacity: 1;
+  border-color: rgba(var(--accent-rgb), 0.36);
+  background: var(--control-bg-focus);
+  box-shadow: var(--focus-ring);
 }
 
 .chat-input {

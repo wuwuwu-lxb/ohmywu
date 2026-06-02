@@ -547,7 +547,7 @@ onMounted(async () => {
 .pill {
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
@@ -580,14 +580,14 @@ onMounted(async () => {
 }
 
 .ghost-btn {
-  background: var(--surface-2);
+  background: var(--control-bg);
 }
 
 .panel {
   padding: 22px 24px;
   border-radius: 22px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
 }
 
@@ -623,7 +623,7 @@ onMounted(async () => {
   height: 8px;
   border-radius: 50%;
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgba(var(--accent-rgb), 0.12);
+  box-shadow: none;
   flex-shrink: 0;
 }
 
@@ -653,7 +653,7 @@ onMounted(async () => {
   padding: 18px;
   border-radius: 20px;
   border: 1px solid rgba(var(--accent-rgb), 0.18);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
   display: flex;
   flex-direction: column;
@@ -683,7 +683,7 @@ onMounted(async () => {
   padding: 0 14px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-primary);
 }
 
@@ -711,7 +711,7 @@ onMounted(async () => {
   padding: 3px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
@@ -745,14 +745,14 @@ onMounted(async () => {
   padding: 16px;
   border-radius: 18px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
   transition: border-color 0.15s ease, background 0.15s ease;
 }
 
 .tool-card:hover {
   border-color: rgba(var(--accent-rgb), 0.18);
-  background: var(--surface-2);
+  background: var(--control-bg);
 }
 
 .tool-top {
@@ -819,7 +819,7 @@ onMounted(async () => {
 }
 
 .pill.stat {
-  background: var(--surface-2);
+  background: var(--control-bg);
 }
 
 .pill.ok {
@@ -847,7 +847,7 @@ onMounted(async () => {
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;

@@ -270,7 +270,7 @@ function updateTags(value: string) {
   color: #f6f8ff;
   font-size: 14px;
   margin-top: 2px;
-  box-shadow: var(--shadow-glow);
+  box-shadow: none;
 }
 
 .msg-body {
@@ -370,7 +370,7 @@ function updateTags(value: string) {
   background: rgba(var(--accent-rgb), 0.12);
   border-color: rgba(var(--accent-rgb), 0.22);
   color: var(--text-primary);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.14);
+  box-shadow: none;
 }
 
 .memory-card {

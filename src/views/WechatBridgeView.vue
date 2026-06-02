@@ -512,7 +512,7 @@ onBeforeUnmount(() => {
   padding: 22px 24px;
   border-radius: 22px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
 }
 
@@ -531,7 +531,7 @@ onBeforeUnmount(() => {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-mono);
@@ -558,7 +558,7 @@ onBeforeUnmount(() => {
   padding: 16px;
   border-radius: 18px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .route-name {
@@ -612,7 +612,7 @@ onBeforeUnmount(() => {
   padding: 0 14px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: rgba(var(--surface-rgb), 0.78);
+  background: var(--control-bg);
   color: var(--text-primary);
 }
 
@@ -658,7 +658,7 @@ onBeforeUnmount(() => {
   padding: 18px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.98);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
 .qr-svg :deep(svg) {

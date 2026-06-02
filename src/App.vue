@@ -230,7 +230,7 @@ onMounted(async () => {
   gap: 16px;
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: rgba(0, 0, 0, 0.08);
 }
 
 .topbar-left {
@@ -245,7 +245,7 @@ onMounted(async () => {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 
 .topbar-btn {
@@ -258,7 +258,7 @@ onMounted(async () => {
 
 .topbar-btn:hover,
 .topbar-chip:hover {
-  background: var(--surface-2);
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
 }
 
@@ -272,7 +272,7 @@ onMounted(async () => {
   padding: 8px 14px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: rgba(255, 255, 255, 0.02);
   font-size: 12px;
   font-family: var(--font-mono);
 }
@@ -282,6 +282,7 @@ onMounted(async () => {
   min-height: 0;
   padding: 0 24px 0;
   overflow: hidden;
+  background: transparent;
 }
 
 .panel-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }

@@ -950,7 +950,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .wiki-title {
@@ -981,7 +981,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 8px 14px;
   border: 1px solid var(--border-color);
   border-radius: 999px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 13px;
   font-family: var(--font);
@@ -1031,7 +1031,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 14px;
   border: 1px solid var(--border-color);
   border-radius: 18px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   text-align: left;
   cursor: pointer;
   transition: all var(--duration-fast);
@@ -1075,7 +1075,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .editor-textarea {
   border: 1px solid var(--border-color);
   border-radius: 14px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-primary);
   font-family: var(--font);
   outline: none;
@@ -1095,9 +1095,9 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .search-input:focus,
 .editor-input:focus,
 .editor-textarea:focus {
-  border-color: rgba(var(--accent-rgb), 0.22);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
-  background: var(--surface-2);
+  border-color: rgba(var(--accent-rgb), 0.34);
+  box-shadow: var(--focus-ring);
+  background: var(--control-bg);
 }
 
 .result-summary,
@@ -1187,7 +1187,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 14px 16px;
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   text-align: left;
   cursor: pointer;
   width: 100%;
@@ -1276,14 +1276,14 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .graph-sidebar {
   border-radius: 22px;
   border: 1px solid var(--border-color);
-  box-shadow: var(--shadow-float);
+  box-shadow: var(--shadow-surface);
 }
 
 .note-article,
 .editor-panel,
 .preview-panel,
 .graph-sidebar {
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .note-article {
@@ -1318,14 +1318,14 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .article-body :deep(code) {
   padding: 1px 6px;
   border-radius: 3px;
-  background: var(--surface-2);
+  background: var(--control-bg);
   font-family: var(--font-mono, monospace);
   font-size: 13px;
 }
 .article-body :deep(pre) {
   padding: 14px;
   border-radius: var(--radius-md);
-  background: var(--surface-2);
+  background: var(--control-bg);
   overflow-x: auto;
   margin: 0 0 16px;
   font-size: 13px;
@@ -1354,7 +1354,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .mini-panel,
 .graph-sidebar {
   padding: 18px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .mini-empty,
@@ -1420,7 +1420,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1493,7 +1493,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
 .graph-panel {
   height: clamp(420px, 72vh, 860px);
   overflow: hidden;
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .graph-canvas {
@@ -1519,7 +1519,7 @@ function drawGraph(canvas: HTMLCanvasElement, data: GraphData, onClick: (s: stri
   width: 12px;
   height: 12px;
   border-radius: 999px;
-  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.03);
+  box-shadow: none;
 }
 
 .legend-label {

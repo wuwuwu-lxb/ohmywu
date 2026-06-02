@@ -551,7 +551,7 @@ onMounted(async () => {
 .panel-card {
   border: 1px solid var(--border-color);
   border-radius: 22px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
 }
 
@@ -612,7 +612,7 @@ onMounted(async () => {
   padding: 14px;
   border-radius: 18px;
   border: 1px solid transparent;
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-primary);
   text-align: left;
   cursor: pointer;
@@ -701,7 +701,7 @@ onMounted(async () => {
   width: 100%;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-primary);
   padding: 12px 14px;
   outline: none;
@@ -710,7 +710,7 @@ onMounted(async () => {
 
 .field-input:focus {
   border-color: rgba(var(--accent-rgb), 0.34);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.12);
+  box-shadow: var(--focus-ring);
 }
 
 .multiline {
@@ -744,7 +744,7 @@ onMounted(async () => {
 .primary-btn {
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-primary);
 }
 
@@ -824,7 +824,7 @@ onMounted(async () => {
   min-height: 44px;
   border-radius: 14px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-secondary);
   padding: 0 14px;
   text-align: left;

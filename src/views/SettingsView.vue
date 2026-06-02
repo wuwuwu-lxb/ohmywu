@@ -650,7 +650,7 @@ async function saveExecutionSettings() {
 }
 
 .card {
-  background: var(--surface-1);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 22px;
   padding: 22px 24px;
@@ -735,7 +735,7 @@ async function saveExecutionSettings() {
   height: 8px;
   border-radius: 999px;
   background: var(--accent);
-  box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.4);
+  box-shadow: none;
   flex-shrink: 0;
 }
 
@@ -770,7 +770,7 @@ async function saveExecutionSettings() {
 .wallpaper-btn {
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
 }
 
 .mini-card {
@@ -815,7 +815,7 @@ async function saveExecutionSettings() {
 .ghost-btn:hover:not(:disabled),
 .mode-btn:hover {
   border-color: rgba(var(--accent-rgb), 0.22);
-  background: var(--surface-2);
+  background: var(--control-bg);
 }
 
 .choice-card.active,
@@ -823,7 +823,7 @@ async function saveExecutionSettings() {
 .mode-btn.active {
   border-color: rgba(var(--accent-rgb), 0.28);
   background: rgba(var(--accent-rgb), 0.08);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.08), 0 10px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--focus-ring);
 }
 
 .choice-title {
@@ -1007,7 +1007,7 @@ async function saveExecutionSettings() {
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-mono);
@@ -1129,7 +1129,7 @@ async function saveExecutionSettings() {
   padding: 8px 14px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -1239,9 +1239,9 @@ async function saveExecutionSettings() {
 .rules-input {
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid rgba(var(--border-rgb), 0.9);
+  border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: rgba(var(--surface-rgb), 0.78);
+  background: var(--control-bg);
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
@@ -1259,7 +1259,7 @@ async function saveExecutionSettings() {
 .form-input:focus,
 .rules-input:focus {
   border-color: rgba(var(--accent-rgb), 0.46);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 .form-input::placeholder,
@@ -1268,7 +1268,7 @@ async function saveExecutionSettings() {
 }
 
 .provider-select {
-  background: var(--surface-1);
+  background: var(--control-bg);
 }
 
 .save-btn {
@@ -1280,7 +1280,7 @@ async function saveExecutionSettings() {
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 12px 28px rgba(var(--accent-rgb), 0.24);
+  box-shadow: none;
 }
 
 .save-btn:disabled {

@@ -398,7 +398,7 @@ onMounted(loadActions)
 .chip {
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
@@ -434,7 +434,7 @@ onMounted(loadActions)
   padding: 18px;
   border-radius: 20px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
 }
 
@@ -556,7 +556,7 @@ onMounted(loadActions)
   padding: 8px 12px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
-  background: var(--surface-2);
+  background: var(--control-bg);
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
@@ -576,7 +576,7 @@ onMounted(loadActions)
   padding: 16px;
   border-radius: 18px;
   border: 1px solid rgba(var(--accent-rgb), 0.16);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   box-shadow: var(--shadow-surface);
 }
 
@@ -594,7 +594,7 @@ onMounted(loadActions)
   margin: 12px 0 0;
   padding: 14px;
   border-radius: 16px;
-  background: var(--surface-2);
+  background: var(--control-bg);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   font-size: 12px;

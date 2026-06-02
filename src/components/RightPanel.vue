@@ -32,7 +32,7 @@ const emit = defineEmits<{ close: [] }>()
 .right-panel {
   width: 0;
   min-width: 0;
-  background: var(--shell-bg);
+  background: var(--shell-bg-soft);
   border-left: 1px solid var(--border-color);
   overflow: hidden;
   transition: width 0.3s var(--ease-out), background 0.3s ease;
@@ -42,7 +42,7 @@ const emit = defineEmits<{ close: [] }>()
 
 .right-panel.open {
   width: var(--right-panel-w);
-  box-shadow: -18px 0 40px rgba(0, 0, 0, 0.16);
+  box-shadow: none;
 }
 
 .panel-header {
@@ -74,7 +74,7 @@ const emit = defineEmits<{ close: [] }>()
   cursor: pointer;
   font-size: 14px;
   border-radius: var(--radius-xs);
-  transition: all var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
 
 .panel-close:hover {

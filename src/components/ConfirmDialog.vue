@@ -42,16 +42,16 @@ const emit = defineEmits<{
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(3, 6, 10, 0.58);
+  background: rgba(3, 6, 10, 0.42);
 }
 
 .confirm-dialog {
   width: min(100%, 420px);
   padding: 22px;
-  border-radius: 20px;
-  border: 1px solid rgba(var(--accent-rgb), 0.14);
-  background: rgba(12, 16, 22, 0.96);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.34);
+  border-radius: 18px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-bg);
+  box-shadow: var(--shadow-float);
 }
 
 .confirm-title {
@@ -84,12 +84,13 @@ const emit = defineEmits<{
 
 .ghost-btn {
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--control-bg);
   color: var(--text-secondary);
 }
 
 .ghost-btn:hover {
-  border-color: rgba(var(--accent-rgb), 0.18);
+  border-color: var(--border-hover);
+  background: var(--control-bg-focus);
   color: var(--text-primary);
 }
 

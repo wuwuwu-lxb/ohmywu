@@ -537,7 +537,7 @@ watch(
 }
 
 .card {
-  background: var(--surface-1);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
   border-radius: 22px;
   padding: 22px 24px;
@@ -612,7 +612,7 @@ watch(
   padding: 14px 16px;
   border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-primary);
   display: flex;
   align-items: center;
@@ -660,7 +660,7 @@ watch(
   padding: 6px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-color);
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   font-size: 11px;
   font-family: var(--font-mono);
@@ -681,9 +681,9 @@ watch(
 .form-input {
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid rgba(var(--border-rgb), 0.9);
+  border: 1px solid var(--border-color);
   border-radius: 16px;
-  background: rgba(var(--surface-rgb), 0.78);
+  background: var(--control-bg);
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
@@ -693,7 +693,7 @@ watch(
 
 .form-input:focus {
   border-color: rgba(var(--accent-rgb), 0.46);
-  box-shadow: 0 0 0 1px rgba(var(--accent-rgb), 0.16);
+  box-shadow: var(--focus-ring);
 }
 
 .form-input::placeholder {
@@ -701,7 +701,7 @@ watch(
 }
 
 .provider-select {
-  background: var(--surface-1);
+  background: var(--control-bg);
 }
 
 .mode-btn,
@@ -715,14 +715,14 @@ watch(
   padding: 8px 14px;
   border: 1px solid var(--border-color);
   border-radius: 12px;
-  background: var(--surface-1);
+  background: var(--panel-bg);
   color: var(--text-secondary);
   cursor: pointer;
 }
 
 .ghost-btn:hover:not(:disabled) {
   border-color: rgba(var(--accent-rgb), 0.22);
-  background: var(--surface-2);
+  background: var(--control-bg);
 }
 
 .ghost-btn:disabled {
